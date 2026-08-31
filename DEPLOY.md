@@ -13,7 +13,8 @@
 1. Supabase 프로젝트의 `Project Settings` > `API`에서 아래 값을 복사합니다.
    - Project URL
    - anon public key
-2. `supabase-config.js` 파일을 열어 아래처럼 바꿉니다.
+2. `public/supabase-config.js` 파일을 열어 아래처럼 바꿉니다.
+   (이 파일은 Git에 올리지 않습니다. 새로 받은 폴더에 없으면 직접 만드세요.)
 
 ```js
 window.KSIMATH_SUPABASE = {
@@ -32,8 +33,43 @@ window.KSIMATH_SUPABASE = {
 
 1. Netlify에 로그인합니다.
 2. `Add new site` > `Deploy manually`를 선택합니다.
-3. 이 폴더 전체를 업로드합니다.
+3. **이 폴더 전체**를 업로드합니다. `public/`만 올리면 안 됩니다.
+   Netlify Functions(사진 숙제 서버)가 함께 배포되지 않아 기능이 멈춥니다.
 4. 만들어진 주소를 학생들에게 보내면 됩니다.
+
+### 무엇이 실제로 공개되는가
+
+폴더 전체를 올리지만, `netlify.toml`의 `publish = "public"` 설정 때문에
+**웹에서 접근 가능한 것은 `public/` 안의 파일뿐입니다.**
+
+| 위치 | 배포 | 공개 |
+|---|---|---|
+| `public/` | O | O — 학생·관리자가 쓰는 화면 |
+| `netlify/functions/` | O | 함수 URL로만 (`/.netlify/functions/...`) |
+| `*.sql`, `*.md`, `outputs/`, `tmp/`, `work/` | 업로드는 되나 서빙 안 됨 | X |
+
+예전에는 `publish = "."` 이라 저장소 전체가 서빙됐고, SQL 마이그레이션과
+학생 실명·성적이 든 파일까지 누구나 내려받을 수 있었습니다.
+
+**새로 추가하는 파일은 웹에서 접근해야 할 때만 `public/`에 넣으세요.**
+
+### 배포 후 확인
+
+주소를 학생에게 보내기 전에 아래를 확인합니다. 앞의 두 개가 200이면
+설정이 적용되지 않은 것이니 학생에게 주소를 보내지 마세요.
+
+```
+https://사이트주소/supabase-schema.sql          → 404 여야 함
+https://사이트주소/insert-2026-g1-final-scores.sql → 404 여야 함
+https://사이트주소/                              → 200
+https://사이트주소/app.js                        → 200
+```
+
+### 이전 배포본 정리
+
+Netlify는 예전 배포를 지우지 않고 각각 고유 주소로 보관합니다.
+`publish`를 바꾸기 전에 만들어진 배포에는 SQL 파일이 그대로 남아 있으므로,
+Netlify 대시보드 `Deploys`에서 과거 배포를 삭제해야 완전히 닫힙니다.
 
 ## 4. 로그인 방식
 

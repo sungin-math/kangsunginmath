@@ -1,5 +1,9 @@
 [build]
-  publish = "."
+  # public/ 안의 파일만 배포합니다.
+  # 예전에는 "." 이라 저장소 전체가 서빙되어 SQL 마이그레이션과
+  # 학생 실명·성적이 든 파일까지 공개 다운로드가 가능했습니다.
+  # 새 파일은 서빙이 필요할 때만 public/에 넣습니다.
+  publish = "public"
   functions = "netlify/functions"
 
 [build.environment]
