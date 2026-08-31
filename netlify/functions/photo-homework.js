@@ -57,6 +57,50 @@ function bearer(event) {
   return String(event.headers.authorization || event.headers.Authorization || "").replace(/^Bearer\s+/i, "");
 }
 
+function clientIp(event) {
+  const headers = event.headers || {};
+  const direct = headers["x-nf-client-connection-ip"] || headers["X-NF-Client-Connection-Ip"];
+  if (direct) return String(direct).trim();
+  const forwarded = headers["x-forwarded-for"] || headers["X-Forwarded-For"] || "";
+  return String(forwarded).split(",")[0].trim() || "unknown";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 로그인 시도 제한은 실패해도 로그인을 막지 않습니다(fail open).
+// apply-login-rate-limit.sql을 적용하기 전에 배포되더라도 로그인이
+// 전면 중단되지 않도록 하기 위해서입니다. 대신 로그에 남겨서
+// 보호가 꺼진 상태를 알아챌 수 있게 합니다.
+async function rateCheck(name, ip) {
+  try {
+    const result = await request("/rest/v1/rpc/login_rate_check", {
+      method: "POST",
+      body: { p_name: name, p_ip: ip },
+    });
+    return {
+      blocked: Boolean(result?.blocked),
+      retryAfter: Math.max(0, Number(result?.retryAfter) || 0),
+      delaySeconds: Math.min(3, Math.max(0, Number(result?.delaySeconds) || 0)),
+    };
+  } catch (error) {
+    console.error("[rate-limit] login_rate_check 실패 — 시도 제한이 적용되지 않습니다:", error.message);
+    return { blocked: false, retryAfter: 0, delaySeconds: 0 };
+  }
+}
+
+async function rateRecord(name, ip, success) {
+  try {
+    await request("/rest/v1/rpc/login_rate_record", {
+      method: "POST",
+      body: { p_name: name, p_ip: ip, p_success: success },
+    });
+  } catch (error) {
+    console.error("[rate-limit] login_rate_record 실패:", error.message);
+  }
+}
+
 function requireUuid(value, label = "ID") {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""))) throw new Error(`${label}가 올바르지 않습니다.`);
   return String(value);
@@ -413,12 +457,37 @@ exports.handler = async (event) => {
     const action = input.action;
 
     if (action === "student-login") {
+      const loginName = String(input.name || "");
+      const ip = clientIp(event);
+
+      const gate = await rateCheck(loginName, ip);
+      if (gate.blocked) {
+        const minutes = Math.max(1, Math.ceil(gate.retryAfter / 60));
+        return {
+          statusCode: 429,
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+            "Retry-After": String(gate.retryAfter),
+          },
+          body: JSON.stringify({
+            error: `로그인 시도가 너무 많습니다. ${minutes}분 뒤에 다시 시도해주세요.`,
+          }),
+        };
+      }
+      // 실패가 쌓인 이름은 응답을 조금씩 늦춰 자동화된 시도를 느리게 만듭니다.
+      if (gate.delaySeconds > 0) await sleep(gate.delaySeconds * 1000);
+
       // service_role로 호출합니다. login_student의 anon 실행 권한을 회수해도
       // 이 경로는 계속 동작하며, 브라우저에서 RPC를 직접 호출할 수 없게 됩니다.
       const rows = await request("/rest/v1/rpc/login_student", { method: "POST", service: true, body: { student_name: input.name, student_password: input.password } });
       const student = rows?.[0];
-      const verifiedStudent = student ? await activeStudent(student.id) : null;
-      if (!student) return json(401, { error: "학생 이름과 비밀번호를 확인해주세요." });
+      if (!student) {
+        await rateRecord(loginName, ip, false);
+        return json(401, { error: "학생 이름과 비밀번호를 확인해주세요." });
+      }
+      const verifiedStudent = await activeStudent(student.id);
+      await rateRecord(loginName, ip, true);
       const session = signStudent(verifiedStudent, Boolean(input.remember));
       return json(200, { ...session, student: publicStudent(verifiedStudent) });
     }
