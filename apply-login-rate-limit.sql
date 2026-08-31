@@ -12,7 +12,7 @@
 --      이름 단위로 차단하면 공격자가 남의 계정을 일부러 잠글 수 있어
 --      (수업 시간에 로그인 불가) 여기서는 지연만 겁니다.
 --
---   3) (@all, IP)   실패 30회 / 15분 → 30분 차단
+--   3) (@all, IP)   실패 30회 / 15분 → 15분 차단
 --      한 IP에서 여러 학생 이름을 훑는 스프레이 공격을 막습니다.
 --
 -- @all은 집계용 표식입니다. 학생 이름이나 IP로 쓰이지 않습니다.
@@ -36,6 +36,11 @@ create index if not exists login_attempts_cleanup_idx
 -- 정책을 만들지 않으므로 anon/authenticated는 전부 차단되고,
 -- service_role만 bypassrls로 읽고 씁니다.
 alter table public.login_attempts enable row level security;
+
+-- RLS만으로도 막히지만(조회는 0건, 쓰기는 정책 위반) 테이블 권한도 회수합니다.
+-- RLS 하나에만 기대면, 나중에 실수로 허용 정책을 추가하거나 RLS를 끄는 순간
+-- 곧바로 열립니다. 권한을 함께 막아두면 그런 경우에도 버팁니다.
+revoke all on table public.login_attempts from anon, authenticated;
 
 
 -- 한 범위의 실패 횟수를 올리고, 임계치를 넘으면 차단 시각을 기록합니다.
