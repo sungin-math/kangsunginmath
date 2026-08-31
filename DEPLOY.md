@@ -13,8 +13,12 @@
 1. Supabase 프로젝트의 `Project Settings` > `API`에서 아래 값을 복사합니다.
    - Project URL
    - anon public key
-2. `public/supabase-config.js` 파일을 열어 아래처럼 바꿉니다.
-   (이 파일은 Git에 올리지 않습니다. 새로 받은 폴더에 없으면 직접 만드세요.)
+2. 배포용 값은 **Netlify 환경변수**에 넣습니다. (3단계에서 등록)
+   `public/supabase-config.js`는 저장소에 두지 않고, 빌드할 때
+   `scripts/generate-config.js`가 환경변수로 만들어 냅니다.
+
+로컬에서 파일을 직접 열어보며 작업할 때만 `public/supabase-config.js`를
+아래 내용으로 손수 만들어 둡니다. 이 파일은 Git에 올라가지 않습니다.
 
 ```js
 window.KSIMATH_SUPABASE = {
@@ -29,27 +33,54 @@ window.KSIMATH_SUPABASE = {
 
 ## 3. 학생들이 접속할 주소 만들기
 
-가장 쉬운 배포 방법은 Netlify입니다.
+GitHub 저장소를 Netlify에 연결해 자동 배포합니다.
+`main`에 push하면 Netlify가 알아서 다시 배포합니다.
+
+### 처음 한 번만 하는 설정
 
 1. Netlify에 로그인합니다.
-2. `Add new site` > `Deploy manually`를 선택합니다.
-3. **이 폴더 전체**를 업로드합니다. `public/`만 올리면 안 됩니다.
-   Netlify Functions(사진 숙제 서버)가 함께 배포되지 않아 기능이 멈춥니다.
-4. 만들어진 주소를 학생들에게 보내면 됩니다.
+2. `Add new site` > `Import an existing project` > `GitHub`을 선택하고
+   `sungin-math/kangsunginmath` 저장소를 고릅니다.
+3. 빌드 설정은 `netlify.toml`에 이미 들어 있으므로 그대로 둡니다.
+   - Build command: `node scripts/generate-config.js`
+   - Publish directory: `public`
+   - Functions directory: `netlify/functions`
+4. `Site configuration` > `Environment variables`에 아래를 등록합니다.
+
+| 이름 | 용도 |
+|---|---|
+| `SUPABASE_URL` | 브라우저 설정 생성 + Function |
+| `SUPABASE_ANON_KEY` | 브라우저 설정 생성 + Function |
+| `SUPABASE_SERVICE_ROLE_KEY` | Function 전용. 브라우저에 나가지 않습니다 |
+| `STUDENT_SESSION_SECRET` | Function 전용. 학생 세션 서명 키 |
+| `ADMIN_EMAIL` | 선택. 로그인 화면 이메일 칸 기본값 |
+
+`SUPABASE_URL`과 `SUPABASE_ANON_KEY`가 비어 있으면 **빌드가 실패합니다.**
+설정 없이 배포되면 앱이 데모 모드로 뜨면서 진짜 데이터가 안 보이는데,
+그 상태로 학생에게 주소가 나가는 것보다 배포가 멈추는 편이 안전하기 때문입니다.
+
+### 그 뒤로는
+
+`git push origin main` 하면 끝입니다. 파일을 직접 올릴 일은 없습니다.
 
 ### 무엇이 실제로 공개되는가
 
-폴더 전체를 올리지만, `netlify.toml`의 `publish = "public"` 설정 때문에
+Netlify는 저장소 전체를 내려받아 빌드하지만,
+`netlify.toml`의 `publish = "public"` 설정 때문에
 **웹에서 접근 가능한 것은 `public/` 안의 파일뿐입니다.**
 
-| 위치 | 배포 | 공개 |
+| 위치 | 빌드에 포함 | 공개 |
 |---|---|---|
 | `public/` | O | O — 학생·관리자가 쓰는 화면 |
 | `netlify/functions/` | O | 함수 URL로만 (`/.netlify/functions/...`) |
-| `*.sql`, `*.md`, `outputs/`, `tmp/`, `work/` | 업로드는 되나 서빙 안 됨 | X |
+| `scripts/` | O | X — 빌드 중에만 실행 |
+| `*.sql`, `*.md` | O | X |
 
 예전에는 `publish = "."` 이라 저장소 전체가 서빙됐고, SQL 마이그레이션과
 학생 실명·성적이 든 파일까지 누구나 내려받을 수 있었습니다.
+
+`insert-*.sql`과 지침서는 `.gitignore`로 저장소에서도 제외했으므로
+Netlify가 아예 내려받지 않습니다.
 
 **새로 추가하는 파일은 웹에서 접근해야 할 때만 `public/`에 넣으세요.**
 

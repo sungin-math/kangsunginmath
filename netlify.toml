@@ -6,6 +6,12 @@
   publish = "public"
   functions = "netlify/functions"
 
+  # public/supabase-config.js는 저장소에 없습니다.
+  # 빌드할 때 SUPABASE_URL / SUPABASE_ANON_KEY 환경변수로 생성합니다.
+  # 환경변수가 비어 있으면 빌드를 실패시킵니다. 조용히 데모 모드로
+  # 배포되는 것보다 배포가 멈추는 편이 안전하기 때문입니다.
+  command = "node scripts/generate-config.js"
+
 [build.environment]
   SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_ANON_KEY"
 

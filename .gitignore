@@ -6,11 +6,9 @@ insert-*.sql
 출결-숙제-이미지-입력-지침서.md
 
 # ─────────────────────────────────────────────
-# Supabase 접속 설정
-# anon key 자체는 브라우저에 공개되는 값이지만,
-# login_student RPC의 anon 실행 권한을 회수하기 전까지는
-# 공개 저장소에 두지 않습니다. (코드-검토-보고서.md §1-2)
-# 재생성 방법: DEPLOY.md 2단계
+# Supabase 접속 설정 — 빌드할 때 생성되는 파일입니다.
+# Netlify 배포: scripts/generate-config.js가 환경변수로 만듭니다.
+# 로컬 작업: public/supabase-config.js를 직접 만들어 두세요. (DEPLOY.md 2단계)
 # ─────────────────────────────────────────────
 supabase-config.js
 
