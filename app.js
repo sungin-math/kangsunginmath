@@ -804,11 +804,13 @@ async function login(event) {
         state.photoSessionError = "";
         student = session.student ? normalizeStudent(session.student) : null;
       } catch (sessionError) {
+        // 예전에는 여기서 login_student RPC를 브라우저에서 직접 호출했습니다.
+        // 그 경로 때문에 RPC를 anon에 열어둬야 했고, 공개된 anon key로
+        // 레이트 리밋 없이 비밀번호를 대입할 수 있었습니다.
+        // 로그인은 이제 서버(Netlify Function)를 통해서만 처리합니다.
         clearPhotoStudentSession();
         state.photoSessionError = sessionError.message;
-        const { data, error } = await supabaseClient.rpc("login_student", { student_name: name, student_password: password });
-        if (error) throw error;
-        student = data?.[0] ? normalizeStudent(data[0]) : null;
+        throw sessionError;
       }
     } else {
       student = activeStudents().find((item) => item.name === name && item.password === password);

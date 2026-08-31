@@ -413,7 +413,9 @@ exports.handler = async (event) => {
     const action = input.action;
 
     if (action === "student-login") {
-      const rows = await request("/rest/v1/rpc/login_student", { method: "POST", service: false, body: { student_name: input.name, student_password: input.password } });
+      // service_role로 호출합니다. login_student의 anon 실행 권한을 회수해도
+      // 이 경로는 계속 동작하며, 브라우저에서 RPC를 직접 호출할 수 없게 됩니다.
+      const rows = await request("/rest/v1/rpc/login_student", { method: "POST", service: true, body: { student_name: input.name, student_password: input.password } });
       const student = rows?.[0];
       const verifiedStudent = student ? await activeStudent(student.id) : null;
       if (!student) return json(401, { error: "학생 이름과 비밀번호를 확인해주세요." });
