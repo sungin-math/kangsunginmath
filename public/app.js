@@ -3358,6 +3358,32 @@ async function loadWeeklyReportHomeworkRows(homeworkIds) {
   return rows;
 }
 
+const WEEKLY_REPORT_SESSION_COLUMNS = "id, class_id, class_id_snapshot, session_date, title, lesson_memo, class_name_snapshot, grade_snapshot, created_at, updated_at";
+
+// 학생별 "최근 3회 기록"은 이번 주 이전 수업까지 거슬러 올라갑니다.
+// 그래서 이번 주 세션만으로는 부족하고, 반별로 직전 수업 몇 회가 더 필요합니다.
+// 한 주에 두세 번 수업하므로 10회면 3건을 채우기에 넉넉하고,
+// 하한 없이 전체를 받던 예전과 달리 받아오는 양이 고정됩니다.
+const WEEKLY_REPORT_PRIOR_SESSION_LIMIT = 10;
+
+async function loadWeeklyReportPriorSessions(classIds, start) {
+  const results = await Promise.all(classIds.map((classId) => supabaseClient
+    .from("class_sessions")
+    .select(WEEKLY_REPORT_SESSION_COLUMNS)
+    .eq("class_id_snapshot", classId)
+    .eq("grade_snapshot", "고1")
+    .lt("session_date", start)
+    .order("session_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(WEEKLY_REPORT_PRIOR_SESSION_LIMIT)));
+  const rows = [];
+  results.forEach(({ data, error }) => {
+    if (error) throw error;
+    rows.push(...(data || []));
+  });
+  return rows;
+}
+
 function weeklyReportTargetRoster() {
   const targetClasses = WEEKLY_REPORT_TARGET_CLASS_NAMES.map((name) => state.data.classes.find((item) => item.name === name && item.gradeLevel === "고1"));
   if (targetClasses.some((item) => !item)) {
@@ -3381,14 +3407,25 @@ async function loadWeeklyReportSources(range) {
   }
 
   const classIds = roster.targetClasses.map((item) => item.id);
-  const sessionRows = await loadWeeklyReportPagedRows(() => supabaseClient
-    .from("class_sessions")
-    .select("id, class_id, class_id_snapshot, session_date, title, lesson_memo, class_name_snapshot, grade_snapshot, created_at, updated_at")
-    .in("class_id_snapshot", classIds)
-    .eq("grade_snapshot", "고1")
-    .lte("session_date", range.effectiveEnd)
-    .order("session_date", { ascending: false })
-    .order("created_at", { ascending: false }));
+  // 예전에는 하한 없이 .lte(effectiveEnd)만 걸어서, 한 주짜리 보고서를 만들려고
+  // 개설 이후 전체 세션과 그에 딸린 모든 학생 기록을 받았습니다. 주가 지날수록
+  // 받아오는 양이 계속 늘어나는 구조였습니다.
+  //
+  // 주간 집계에 필요한 건 이번 주 세션뿐이고, 그 이전 세션은 학생별
+  // "최근 3회 기록" 표시에만 쓰이므로 반별 직전 몇 회로 제한합니다.
+  const [weekSessionRows, priorSessionRows] = await Promise.all([
+    loadWeeklyReportPagedRows(() => supabaseClient
+      .from("class_sessions")
+      .select(WEEKLY_REPORT_SESSION_COLUMNS)
+      .in("class_id_snapshot", classIds)
+      .eq("grade_snapshot", "고1")
+      .gte("session_date", range.start)
+      .lte("session_date", range.effectiveEnd)
+      .order("session_date", { ascending: false })
+      .order("created_at", { ascending: false })),
+    loadWeeklyReportPriorSessions(classIds, range.start),
+  ]);
+  const sessionRows = [...weekSessionRows, ...priorSessionRows];
   const sessions = sessionRows.map(normalizeClassSession);
   const recordRows = sessionRows.length ? await loadWeeklyReportRecordRows(sessionRows.map((item) => item.id)) : [];
 
@@ -3499,6 +3536,16 @@ function compareWeeklyReportLessonPraise(a, b) {
     || String(a.studentId).localeCompare(String(b.studentId));
 }
 
+function groupWeeklyReportEntries(entries) {
+  const grouped = new Map();
+  entries.forEach((entry) => {
+    const list = grouped.get(entry.record.studentId);
+    if (list) list.push(entry);
+    else grouped.set(entry.record.studentId, [entry]);
+  });
+  return grouped;
+}
+
 function calculateWeeklyReport(range, sources) {
   const classIds = new Set(sources.targetClasses.map((item) => item.id));
   const studentById = new Map(sources.students.map((item) => [item.id, item]));
@@ -3509,15 +3556,24 @@ function calculateWeeklyReport(range, sources) {
     .filter((entry) => entry.session && studentById.has(entry.record.studentId));
   const validAttendance = new Set(LESSON_ATTENDANCE_OPTIONS.map(([value]) => value));
   const validHomework = new Set(LESSON_HOMEWORK_OPTIONS.map(([value]) => value));
-  const invalidLessonRecordCount = entries.filter((entry) => !validAttendance.has(entry.record.attendanceStatus) || !validHomework.has(entry.record.homeworkAchievement)).length;
   const weekEntries = entries.filter((entry) => entry.session.sessionDate >= range.start && entry.session.sessionDate <= range.effectiveEnd);
+  // 이번 주 기록만 셉니다. 예전에는 불러온 전체 기록을 훑었는데, 조회 범위가
+  // 개설 이후 전체였기 때문에 몇 년 전 이상 데이터가 이번 주 보고서에
+  // 계속 따라붙었습니다.
+  const invalidLessonRecordCount = weekEntries.filter((entry) => !validAttendance.has(entry.record.attendanceStatus) || !validHomework.has(entry.record.homeworkAchievement)).length;
+
+  // 학생마다 전체 기록을 훑던 것을 한 번의 그룹핑으로 바꿉니다.
+  // 예전에는 filter가 학생 수만큼 반복돼 O(학생 × 전체기록)이었습니다.
+  const entriesByStudentId = groupWeeklyReportEntries(entries);
+  const weekEntriesByStudentId = groupWeeklyReportEntries(weekEntries);
+  const classById = new Map(sources.targetClasses.map((item) => [item.id, item]));
 
   const studentSummaries = sources.students.map((student) => {
-    const studentEntries = entries.filter((entry) => entry.record.studentId === student.id);
-    const weeklyEntries = weekEntries.filter((entry) => entry.record.studentId === student.id);
+    const studentEntries = entriesByStudentId.get(student.id) || [];
+    const weeklyEntries = weekEntriesByStudentId.get(student.id) || [];
     const recent3Records = studentEntries.slice().sort((a, b) => b.session.sessionDate.localeCompare(a.session.sessionDate)
       || String(b.record.createdAt || "").localeCompare(String(a.record.createdAt || ""))).slice(0, 3);
-    const classItem = sources.targetClasses.find((item) => item.id === student.classId);
+    const classItem = classById.get(student.classId);
     return {
       studentId: student.id,
       name: student.name,
@@ -3559,7 +3615,7 @@ function calculateWeeklyReport(range, sources) {
       name: student.name,
       school: student.school || "",
       classId: student.classId,
-      className: sources.targetClasses.find((item) => item.id === student.classId)?.name || "미지정 반",
+      className: classById.get(student.classId)?.name || "미지정 반",
       completedCount: 0,
       firstCompletedAt: Number.POSITIVE_INFINITY,
       assignments: [],
@@ -3794,7 +3850,7 @@ function weeklyReportReadinessMarkup(report) {
         <div class="weekly-report-data-warning">
           <strong>데이터 확인 항목</strong>
           ${report.photoDataIssueCount ? `<span>완료 상태이지만 완료 처리 시각이 없는 사진 숙제 ${report.photoDataIssueCount}건</span>` : ""}
-          ${report.invalidLessonRecordCount ? `<span>허용되지 않은 상태값이 있는 수업 기록 ${report.invalidLessonRecordCount}건</span>` : ""}
+          ${report.invalidLessonRecordCount ? `<span>허용되지 않은 상태값이 있는 이번 주 수업 기록 ${report.invalidLessonRecordCount}건</span>` : ""}
         </div>
       ` : ""}
     </section>
