@@ -32,8 +32,12 @@ revoke all on table public.photo_homeworks            from anon;
 revoke all on table public.photo_homework_assignments from anon;
 revoke all on table public.photo_submission_photos    from anon;
 revoke all on table public.photo_deletion_logs        from anon;
+revoke all on table public.photo_submission_rounds    from anon;
 
 commit;
+
+-- class_sessions, student_lesson_records, photo_homework_target_classes는
+-- 만들 때 이미 회수돼 있어 여기 없습니다. anon으로 조회하면 401이 납니다.
 
 
 -- 확인용 조회 (실행하지 않아도 됩니다)
