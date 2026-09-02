@@ -480,13 +480,38 @@ exports.handler = async (event) => {
 
       // service_role로 호출합니다. login_student의 anon 실행 권한을 회수해도
       // 이 경로는 계속 동작하며, 브라우저에서 RPC를 직접 호출할 수 없게 됩니다.
-      const rows = await request("/rest/v1/rpc/login_student", { method: "POST", service: true, body: { student_name: input.name, student_password: input.password } });
-      const student = rows?.[0];
-      if (!student) {
+      // 맞는 학생을 전부 받습니다. 예전에는 RPC가 limit 1이라 동명이인 둘이
+      // 같은 비밀번호를 쓰면 누구 계정이 열릴지 정해져 있지 않았습니다.
+      const school = String(input.school || "").trim();
+      const rows = await request("/rest/v1/rpc/login_student_matches", {
+        method: "POST",
+        service: true,
+        body: { student_name: input.name, student_password: input.password, student_school: school || null },
+      });
+
+      if (!rows || rows.length === 0) {
         await rateRecord(loginName, ip, false);
         return json(401, { error: "학생 이름과 비밀번호를 확인해주세요." });
       }
-      const verifiedStudent = await activeStudent(student.id);
+
+      // 동명이인입니다. 비밀번호는 맞았고 어느 계정인지만 못 고른 상태라
+      // 실패로 세지 않습니다. 여기서 시도 횟수를 올리면 자기 비밀번호를
+      // 제대로 넣은 학생이 차단됩니다.
+      if (rows.length > 1) {
+        const schools = [...new Set(rows.map((row) => String(row.school || "").trim()).filter(Boolean))];
+        // 학교를 이미 받았는데도 여럿이거나, 학교로도 가를 수 없는 경우입니다.
+        // 더 물어봐야 답이 안 나오므로 여기서 끊습니다.
+        if (school || schools.length < 2) {
+          return json(409, { error: "같은 이름의 학생이 여러 명이라 자동으로 구분할 수 없습니다. 선생님께 문의해주세요." });
+        }
+        return json(409, {
+          needSchool: true,
+          schools,
+          error: "같은 이름의 학생이 여러 명입니다. 학교를 선택하고 비밀번호를 다시 입력해주세요.",
+        });
+      }
+
+      const verifiedStudent = await activeStudent(rows[0].id);
       await rateRecord(loginName, ip, true);
       const session = signStudent(verifiedStudent, Boolean(input.remember));
       return json(200, { ...session, student: publicStudent(verifiedStudent) });

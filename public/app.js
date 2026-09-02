@@ -685,12 +685,20 @@ function renderLogin() {
           <form onsubmit="login(event)">
             <div class="field">
               <label for="loginName">${adminMode && supabaseClient ? "이메일" : "이름"}</label>
-              <input id="loginName" autocomplete="username" placeholder="${adminMode && supabaseClient ? "관리자 이메일" : "이름을 입력하세요"}" value="${adminMode ? h(supabaseClient ? config.adminEmail || "teacher@example.com" : "선생님") : ""}" />
+              <input id="loginName" autocomplete="username" placeholder="${adminMode && supabaseClient ? "관리자 이메일" : "이름을 입력하세요"}" value="${adminMode ? h(supabaseClient ? config.adminEmail || "teacher@example.com" : "선생님") : h(state.loginName || "")}" />
             </div>
             <div class="field">
               <label for="loginPassword">비밀번호</label>
               <input id="loginPassword" type="password" autocomplete="current-password" placeholder="비밀번호를 입력하세요" />
             </div>
+            ${!adminMode && (state.loginSchools || []).length ? `
+              <div class="field">
+                <label for="loginSchool">학교</label>
+                <select id="loginSchool">
+                  <option value="">학교를 선택하세요</option>
+                  ${state.loginSchools.map((item) => `<option value="${h(item)}">${h(item)}</option>`).join("")}
+                </select>
+              </div>` : ""}
             ${!adminMode ? `
               <label class="remember-login">
                 <input id="rememberStudentLogin" type="checkbox" />
@@ -766,6 +774,8 @@ if ("serviceWorker" in navigator) {
 function setRole(role) {
   state.role = role;
   state.message = "";
+  state.loginSchools = [];
+  state.loginName = "";
   renderLogin();
 }
 
@@ -773,6 +783,14 @@ async function login(event) {
   event.preventDefault();
   const name = document.querySelector("#loginName").value.trim();
   const password = document.querySelector("#loginPassword").value;
+  // 학교 칸은 동명이인일 때만 나타나고, 그 이름에만 유효합니다.
+  // 공용 기기에서 다음 학생이 로그인할 때 남의 학교 목록이 남아 있으면
+  // required에 걸려 아예 진행이 안 되므로 이름이 바뀌면 지웁니다.
+  if (state.loginName && name !== state.loginName) {
+    state.loginSchools = [];
+    state.loginName = "";
+  }
+  const school = (state.loginSchools || []).length ? (document.querySelector("#loginSchool")?.value || "") : "";
   const rememberStudent = state.role === "student" && Boolean(document.querySelector("#rememberStudentLogin")?.checked);
   state.message = "";
 
@@ -799,11 +817,24 @@ async function login(event) {
     let student;
     if (supabaseClient) {
       try {
-        const session = await photoApi("student-login", { name, password, remember: rememberStudent }, "");
+        const session = await photoApi("student-login", { name, password, school, remember: rememberStudent }, "");
         savePhotoStudentSession(session.token, rememberStudent);
         state.photoSessionError = "";
+        state.loginSchools = [];
+        state.loginName = "";
         student = session.student ? normalizeStudent(session.student) : null;
       } catch (sessionError) {
+        // 동명이인이라 학교를 더 받아야 하는 경우입니다.
+        // 비밀번호는 이미 맞았고 어느 계정인지만 못 고른 상태이므로,
+        // 학교 선택 칸을 띄우고 다시 시도하게 합니다.
+        if (sessionError.data?.needSchool) {
+          state.loginSchools = sessionError.data.schools || [];
+          // 다시 그리면 입력칸이 비므로 이름은 남겨둡니다.
+          // 비밀번호는 상태에 담지 않고 다시 받습니다.
+          state.loginName = name;
+          clearPhotoStudentSession();
+          throw sessionError;
+        }
         // 예전에는 여기서 login_student RPC를 브라우저에서 직접 호출했습니다.
         // 그 경로 때문에 RPC를 anon에 열어둬야 했고, 공개된 anon key로
         // 레이트 리밋 없이 비밀번호를 대입할 수 있었습니다.
@@ -1139,7 +1170,14 @@ async function photoApi(action, payload = {}, explicitToken) {
     body: JSON.stringify({ action, ...payload }),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || "사진 숙제 서버 요청에 실패했습니다.");
+  if (!response.ok) {
+    // 응답 본문을 오류에 실어 보냅니다. 동명이인 로그인처럼 호출한 쪽이
+    // 메시지 말고 다른 값(학교 목록 등)까지 봐야 하는 경우가 있습니다.
+    const error = new Error(result.error || "사진 숙제 서버 요청에 실패했습니다.");
+    error.status = response.status;
+    error.data = result;
+    throw error;
+  }
   return result;
 }
 
