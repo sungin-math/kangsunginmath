@@ -2402,7 +2402,11 @@ async function recordVideoView(videoId) {
     clickedAt: new Date().toISOString(),
   };
   if (supabaseClient) {
-    await supabaseClient.from("video_views").insert(toDb(payload));
+    // 서버가 세션 토큰으로 student_id를 정하고 clicked_at은 DB가 찍습니다.
+    // 예전에는 여기서 브라우저가 직접 insert했고, 그 때문에 video_views를
+    // anon에 열어둬야 했습니다. 공개된 anon key로 누구나 남의 이름을 달아
+    // 시청 기록을 만들어 넣을 수 있는 상태였습니다.
+    await photoApi("record-video-view", { videoId });
     return;
   }
   state.data.videoViews = state.data.videoViews || [];

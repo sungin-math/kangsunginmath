@@ -148,10 +148,22 @@ to authenticated
 using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
 with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
 
-create policy "Students can record video views"
-on public.video_views for insert
-to anon, authenticated
-with check (true);
+-- 학생용 INSERT 정책은 없습니다.
+--
+-- 예전에는 아래 정책이 있었습니다.
+--
+--   create policy "Students can record video views"
+--   on public.video_views for insert
+--   to anon, authenticated
+--   with check (true);
+--
+-- 조건이 없어서, 브라우저에 공개된 anon key만 있으면 누구나 임의의
+-- student_id로 시청 기록을 무제한 넣을 수 있었습니다.
+--
+-- 이제 Netlify Function의 record-video-view가 학생 세션 토큰에서
+-- student_id를 정해 service_role로 넣습니다. service_role은 RLS를
+-- 우회하므로 학생용 정책이 필요 없습니다.
+-- (apply-video-view-server-only.sql)
 
 create policy "Admin can manage video views"
 on public.video_views for all

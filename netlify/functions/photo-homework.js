@@ -499,6 +499,26 @@ exports.handler = async (event) => {
       return json(200, { student: publicStudent(student) });
     }
 
+    // 시청 기록은 브라우저가 직접 넣지 않습니다.
+    // 예전에는 video_views INSERT가 anon에 전면 개방(with check (true))돼
+    // 있어서, 누구나 임의의 student_id와 video_id로 기록을 무한히 넣을 수
+    // 있었습니다. 통계가 오염되고 테이블이 무한정 커지는 경로였습니다.
+    //
+    // student_id는 세션 토큰에서 서버가 정하고, clicked_at은 DB 기본값인
+    // now()를 씁니다. 둘 다 클라이언트 값을 믿지 않습니다.
+    if (action === "record-video-view") {
+      const session = verifyStudent(bearer(event));
+      const student = await activeStudent(session.sub);
+      if (!student) return json(401, { error: "학생 세션이 유효하지 않습니다. 다시 로그인해주세요." });
+      const videoId = requireUuid(input.videoId, "영상 ID");
+      await request("/rest/v1/video_views", {
+        method: "POST",
+        body: { student_id: student.id, video_id: videoId },
+        headers: { Prefer: "return=minimal" },
+      });
+      return json(200, { ok: true });
+    }
+
     if (action === "student-dashboard") {
       const { student } = await requireStudent(event);
       return json(200, await studentDashboard(student.id));
