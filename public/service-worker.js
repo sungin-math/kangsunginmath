@@ -1,8 +1,8 @@
-const CACHE_VERSION = "ksimath-static-v40";
+const CACHE_VERSION = "ksimath-static-v41";
 const STATIC_FILES = [
   "/offline.html",
-  "/styles.css?v=20260902-3",
-  "/app.js?v=20260902-3",
+  "/styles.css?v=20260902-4",
+  "/app.js?v=20260902-4",
   "/supabase-config.js",
   "/manifest.webmanifest",
   "/assets/logo-horizontal.png",

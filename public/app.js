@@ -161,8 +161,9 @@ function initialLessonJournalState() {
     dirty: false,
     saving: false,
     loading: false,
-    loadPromise: null,
-    loaded: false,
+    loadPromises: {},
+    sessionsLoaded: false,
+    recordsLoaded: false,
     feedback: { type: "", text: "" },
     filters: {
       date: { from: "", to: "", classId: "" },
@@ -1114,8 +1115,12 @@ async function go(view) {
     return;
   }
   if (view === "lesson-journal") {
-    const loaded = await loadLessonJournalData(true);
+    // 회차 목록만 새로 받습니다. 작은 테이블이라 매번 받아도 부담이 없고,
+    // 그 사이 저장된 일지가 목록에 바로 보입니다.
+    const loaded = await loadLessonJournalSessions(true);
+    if (loaded && state.lessonJournal.view !== "write") await loadLessonJournalRecords();
     if (loaded && state.lessonJournal.draft?.sessionId && !state.lessonJournal.dirty) {
+      await loadLessonJournalSessionRecords(state.lessonJournal.draft.sessionId);
       setLessonJournalDraftFromSession(state.lessonJournal.draft.sessionId, true);
     }
   }
@@ -2549,43 +2554,92 @@ async function loadAllLessonJournalRows(table, orderColumn, ascending = true) {
   return rows;
 }
 
-async function loadLessonJournalData(force = false) {
+// 수업일지는 두 테이블을 씁니다.
+//
+//   class_sessions          수업 회차. 반당 주 2~3회라 양이 적습니다.
+//   student_lesson_records  회차마다 학생 수만큼 생깁니다. 이쪽이 계속 커집니다.
+//
+// 예전에는 메뉴에 들어갈 때마다(go에서 force=true) 둘 다 전부 다시
+// 받았습니다. 학생 60명 기준 3년이면 기록이 1만 5천 행인데, 정작
+// 작성 화면이 쓰는 건 편집할 회차 하나의 기록뿐입니다.
+//
+// 그래서 회차는 항상 받고(작아서 부담이 없고 목록이 최신이어야 합니다),
+// 전체 기록은 그것이 실제로 필요한 조회 화면 셋에서만 받습니다.
+// 조회 화면이 보여주는 범위는 예전과 똑같습니다.
+async function runLessonJournalLoad(key, worker) {
   const journal = state.lessonJournal;
   if (state.user?.role !== "admin") return false;
-  if (journal.loading) return journal.loadPromise || false;
-  if (journal.loaded && !force) return true;
+  if (journal.loadPromises[key]) return journal.loadPromises[key];
   journal.loading = true;
-  journal.loadPromise = (async () => {
+  const promise = (async () => {
     try {
-      if (supabaseClient) {
-        const [sessions, records] = await Promise.all([
-          loadAllLessonJournalRows("class_sessions", "session_date", false),
-          loadAllLessonJournalRows("student_lesson_records", "created_at", true),
-        ]);
-        journal.sessions = sessions.map(normalizeClassSession);
-        journal.records = records.map(normalizeStudentLessonRecord);
-      } else {
-        journal.sessions = (state.data.classSessions || []).map(normalizeClassSession);
-        journal.records = (state.data.studentLessonRecords || []).map(normalizeStudentLessonRecord);
-      }
-      journal.loaded = true;
+      await worker(journal);
       if (journal.feedback.type === "error") journal.feedback = { type: "", text: "" };
       return true;
     } catch (error) {
-      journal.loaded = false;
       journal.feedback = {
         type: "error",
         text: `수업일지 데이터를 불러오지 못했습니다. Supabase에 apply-lesson-journal.sql을 먼저 적용했는지 확인해주세요. (${error.message})`,
       };
       return false;
     } finally {
-      journal.loading = false;
+      if (journal.loadPromises[key] === promise) journal.loadPromises[key] = null;
+      // 회차와 기록을 동시에 받을 수 있으므로, 남은 작업이 있으면 계속 켜둡니다.
+      journal.loading = Object.values(journal.loadPromises).some(Boolean);
     }
   })();
-  const currentLoad = journal.loadPromise;
-  const result = await currentLoad;
-  if (journal.loadPromise === currentLoad) journal.loadPromise = null;
-  return result;
+  journal.loadPromises[key] = promise;
+  return promise;
+}
+
+async function loadLessonJournalSessions(force = false) {
+  const journal = state.lessonJournal;
+  if (journal.sessionsLoaded && !force) return true;
+  return runLessonJournalLoad("sessions", async () => {
+    journal.sessions = supabaseClient
+      ? (await loadAllLessonJournalRows("class_sessions", "session_date", false)).map(normalizeClassSession)
+      : (state.data.classSessions || []).map(normalizeClassSession);
+    journal.sessionsLoaded = true;
+  });
+}
+
+// 조회 화면 셋은 전 기간을 훑습니다. 학생별 화면의 학생 목록은 기록에서
+// "명단에 없는 과거 학생"을 찾아내고, 요약과 날짜별은 기간 필터가 비면
+// 전체를 집계합니다. 그래서 여기서는 범위를 줄이지 않고 전부 받습니다.
+// 화면에 보이는 내용을 조용히 바꾸지 않기 위해서입니다.
+async function loadLessonJournalRecords(force = false) {
+  const journal = state.lessonJournal;
+  if (journal.recordsLoaded && !force) return true;
+  return runLessonJournalLoad("records", async () => {
+    journal.records = supabaseClient
+      ? (await loadAllLessonJournalRows("student_lesson_records", "created_at", true)).map(normalizeStudentLessonRecord)
+      : (state.data.studentLessonRecords || []).map(normalizeStudentLessonRecord);
+    journal.recordsLoaded = true;
+  });
+}
+
+// 작성 화면에서 기존 일지를 열 때는 그 회차의 기록만 있으면 됩니다.
+async function loadLessonJournalSessionRecords(sessionId) {
+  const journal = state.lessonJournal;
+  if (journal.recordsLoaded || !sessionId) return true;
+  return runLessonJournalLoad(`session:${sessionId}`, async () => {
+    let rows;
+    if (supabaseClient) {
+      const { data, error } = await supabaseClient
+        .from("student_lesson_records")
+        .select("*")
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      rows = (data || []).map(normalizeStudentLessonRecord);
+    } else {
+      rows = (state.data.studentLessonRecords || [])
+        .map(normalizeStudentLessonRecord)
+        .filter((record) => record.sessionId === sessionId);
+    }
+    // 같은 회차를 다시 열 수 있으므로 겹치는 기록은 새 값으로 갈아끼웁니다.
+    journal.records = [...journal.records.filter((record) => record.sessionId !== sessionId), ...rows];
+  });
 }
 
 function lessonJournalRoster(classId) {
@@ -2640,7 +2694,7 @@ function markLessonJournalDirty() {
   if (!state.lessonJournal.saving) state.lessonJournal.dirty = true;
 }
 
-function setLessonJournalView(view) {
+async function setLessonJournalView(view) {
   const allowed = ["write", "date", "student", "summary"];
   if (!allowed.includes(view) || state.lessonJournal.view === view) return;
   if (state.lessonJournal.view === "write" && state.lessonJournal.dirty) {
@@ -2650,6 +2704,15 @@ function setLessonJournalView(view) {
   }
   state.lessonJournal.view = view;
   state.lessonJournal.feedback = { type: "", text: "" };
+  if (view === "write") {
+    render();
+    return;
+  }
+  // 조회 화면 셋만 전체 기록이 필요합니다.
+  // 먼저 호출해야 journal.loading이 켜져서 render가 안내 문구를 그립니다.
+  const pending = loadLessonJournalRecords();
+  render();
+  await pending;
   render();
 }
 
@@ -2754,9 +2817,11 @@ function setLessonJournalDraftFromSession(sessionId, keepCurrentView = false) {
   return true;
 }
 
-function loadLessonJournalForEdit(sessionId) {
+async function loadLessonJournalForEdit(sessionId) {
   if (!sessionId) return;
   if (state.lessonJournal.dirty && !confirmDiscardLessonJournalDraft()) return;
+  // 전체 기록을 받지 않았다면 이 회차 것만 받아옵니다.
+  await loadLessonJournalSessionRecords(sessionId);
   if (!setLessonJournalDraftFromSession(sessionId)) {
     state.lessonJournal.feedback = { type: "error", text: "선택한 수업일지를 찾을 수 없습니다." };
   } else {
@@ -2902,7 +2967,14 @@ async function saveLessonJournal(event) {
     storageCommitted = true;
     journal.dirty = false;
     journal.saving = false;
-    const reloaded = await loadLessonJournalData(true);
+    // 회차 목록은 방금 저장한 건이 보이도록 항상 다시 받습니다.
+    // 기록은 이미 전체를 받아둔 경우에만 통째로 갱신하고,
+    // 그렇지 않으면 방금 저장한 회차 것만 받습니다.
+    const reloaded = await loadLessonJournalSessions(true);
+    if (reloaded) {
+      if (journal.recordsLoaded) await loadLessonJournalRecords(true);
+      else await loadLessonJournalSessionRecords(savedSessionId);
+    }
     if (!reloaded || !setLessonJournalDraftFromSession(savedSessionId)) {
       journal.feedback = {
         type: "error",
