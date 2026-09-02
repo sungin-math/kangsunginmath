@@ -41,6 +41,20 @@ GitHub 저장소를 Netlify에 연결해 자동 배포합니다.
 1. Netlify에 로그인합니다.
 2. `Add new site` > `Import an existing project` > `GitHub`을 선택하고
    `sungin-math/kangsunginmath` 저장소를 고릅니다.
+
+   > **저장소가 목록에 안 보여도 그냥 진행하지 마세요.**
+   >
+   > Netlify GitHub 앱에 그 저장소 접근 권한이 없으면 목록에 뜨지 않습니다.
+   > 이때 계속 진행하면 Netlify가 **지금 배포본으로 새 저장소를 만들어** 연결합니다.
+   > 그 저장소는 업로드된 파일을 그대로 스냅샷 뜬 것이라 `.gitignore`가 적용되지
+   > 않고, 학생 실명·성적·성적표 이미지까지 공개 저장소로 나갑니다.
+   >
+   > 목록에 없으면 화면 아래 `Configure the Netlify app on GitHub`을 눌러
+   > `Repository access`에 `kangsunginmath`를 추가하고 돌아와 새로고침하세요.
+   >
+   > 2026-09-02에 실제로 이 일이 있었습니다. `sungin-math-kangsunginmath`라는
+   > 저장소가 자동 생성되어 이틀간 공개됐고, 동시에 push한 코드가 배포되지
+   > 않아 로그인 시도 제한이 적용되지 않은 상태였습니다.
 3. 빌드 설정은 `netlify.toml`에 이미 들어 있으므로 그대로 둡니다.
    - Build command: `node scripts/generate-config.js`
    - Publish directory: `public`
@@ -62,6 +76,17 @@ GitHub 저장소를 Netlify에 연결해 자동 배포합니다.
 ### 그 뒤로는
 
 `git push origin main` 하면 끝입니다. 파일을 직접 올릴 일은 없습니다.
+
+**Netlify에 폴더를 끌어다 놓는 배포는 이제 하지 마세요.** `.gitignore`는 git이
+커밋할 때만 동작하므로, 드래그 배포는 제외 대상 파일까지 통째로 올려버립니다.
+`git push`만 쓰면 `.gitignore`가 항상 보호막이 됩니다.
+
+배포가 반영됐는지는 이걸로 확인합니다. 머리말 두 줄이 보이면 빌드로 생성된
+파일이므로 Git 배포가 올라간 것이고, 안 보이면 옛 드래그 배포본입니다.
+
+```
+curl -s https://사이트주소/supabase-config.js | head -2
+```
 
 ### 무엇이 실제로 공개되는가
 
