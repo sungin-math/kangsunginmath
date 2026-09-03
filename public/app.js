@@ -529,8 +529,30 @@ function uid(prefix) {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// state.data는 refreshData에서 통째로 교체되고, 데모 모드 쓰기도 배열을 새로
+// 만들도록 맞춰뒀습니다(writeRecord, deleteRecord, saveSchoolScores).
+// 그래서 배열 자체를 키로 캐시해도 값이 상하지 않습니다.
+//
+// find와 동작을 맞추기 위해 같은 id가 여럿이면 먼저 나온 것을 씁니다.
+let classIndexSource = null;
+let classIndex = new Map();
+function classById(classId) {
+  const list = state.data.classes || [];
+  if (classIndexSource !== list) {
+    classIndex = new Map();
+    list.forEach((item) => {
+      if (!classIndex.has(item.id)) classIndex.set(item.id, item);
+    });
+    classIndexSource = list;
+  }
+  return classIndex.get(classId);
+}
+
+// 캘린더는 셀 42개를 그리면서 정렬 비교자마다 이걸 두 번씩 부르고,
+// 사진 통계는 배정 한 건마다 부릅니다. 예전에는 그때마다 반 배열을
+// 선형 탐색했습니다.
 function className(classId) {
-  return state.data.classes.find((item) => item.id === classId)?.name || "미지정 반";
+  return classById(classId)?.name || "미지정 반";
 }
 
 function gradeLabelFromClassName(name) {
@@ -540,7 +562,7 @@ function gradeLabelFromClassName(name) {
 function classGradeLevel(classOrId) {
   const classItem = classOrId && typeof classOrId === "object"
     ? classOrId
-    : state.data.classes.find((item) => item.id === classOrId);
+    : classById(classOrId);
   const storedGrade = classItem?.gradeLevel || classItem?.grade_level || "";
   if (["고1", "고2", "고3"].includes(storedGrade)) return storedGrade;
   return gradeLabelFromClassName(classItem?.name || "");
@@ -4376,14 +4398,34 @@ function setSchoolCompareFilter(field, value) {
   render();
 }
 
+// DB에 (student_id, school_year, grade_level, semester, exam_type) 유일 제약이
+// 걸려 있는 조합입니다. 그대로 색인 키로 씁니다.
+// schoolYear는 문자열로 넘어오기도 해서 예전 비교식처럼 숫자로 맞춥니다.
+function schoolScoreKey(studentId, schoolYear, gradeLevel, semester, examType) {
+  return `${studentId}|${Number(schoolYear)}|${gradeLevel}|${semester}|${examType}`;
+}
+
+// 성적 비교 화면은 학생마다 시험 4개를 찾습니다. 예전에는 그때마다 전체
+// 성적 배열을 선형 탐색해서 학생 200명이면 80만 회였습니다.
+//
+// find와 동작을 맞추기 위해 같은 키가 여럿이면 먼저 나온 것을 씁니다.
+let schoolScoreIndexSource = null;
+let schoolScoreIndex = new Map();
+function schoolScoreIndexMap() {
+  const list = state.data.studentScores || [];
+  if (schoolScoreIndexSource !== list) {
+    schoolScoreIndex = new Map();
+    list.forEach((item) => {
+      const key = schoolScoreKey(item.studentId, item.schoolYear, item.gradeLevel, item.semester, item.examType);
+      if (!schoolScoreIndex.has(key)) schoolScoreIndex.set(key, item);
+    });
+    schoolScoreIndexSource = list;
+  }
+  return schoolScoreIndex;
+}
+
 function findSchoolScore(studentId, schoolYear, gradeLevel, semester, examType) {
-  return (state.data.studentScores || []).find((item) =>
-    item.studentId === studentId
-    && item.schoolYear === Number(schoolYear)
-    && item.gradeLevel === gradeLevel
-    && item.semester === semester
-    && item.examType === examType
-  );
+  return schoolScoreIndexMap().get(schoolScoreKey(studentId, schoolYear, gradeLevel, semester, examType));
 }
 
 function manageSchoolScores() {
@@ -4495,11 +4537,25 @@ async function saveSchoolScoresBulk(event) {
       if (error) throw error;
       await refreshData();
     } else {
-      records.forEach((record) => {
-        const existing = findSchoolScore(record.studentId, record.schoolYear, record.gradeLevel, record.semester, record.examType);
-        if (existing) Object.assign(existing, record);
-        else state.data.studentScores.push({ id: uid("s"), ...record });
+      // 여기서도 배열을 새로 만듭니다. 색인이 배열 식별자에 묶여 있어서
+      // 제자리로 바꾸면 방금 넣은 성적이 조회되지 않습니다.
+      const next = [...(state.data.studentScores || [])];
+      const indexByKey = new Map();
+      next.forEach((item, index) => {
+        const key = schoolScoreKey(item.studentId, item.schoolYear, item.gradeLevel, item.semester, item.examType);
+        if (!indexByKey.has(key)) indexByKey.set(key, index);
       });
+      records.forEach((record) => {
+        const key = schoolScoreKey(record.studentId, record.schoolYear, record.gradeLevel, record.semester, record.examType);
+        const index = indexByKey.get(key);
+        if (index === undefined) {
+          indexByKey.set(key, next.length);
+          next.push({ id: uid("s"), ...record });
+        } else {
+          next[index] = { ...next[index], ...record };
+        }
+      });
+      state.data.studentScores = next;
       saveDemoData();
     }
     state.message = "";
@@ -5020,8 +5076,12 @@ async function writeRecord(table, payload, id) {
       student_scores: "studentScores", student_notes: "studentNotes", counseling_records: "counselingRecords",
     };
     const key = localMap[table];
-    if (id) Object.assign(state.data[key].find((item) => item.id === id), payload);
-    else state.data[key].push({ id: uid(table[0]), ...payload });
+    // 배열을 제자리로 바꾸지 않고 새로 만듭니다.
+    // classById / findSchoolScore가 배열 자체를 키로 색인을 캐시하므로,
+    // push나 Object.assign으로 몰래 바꾸면 옛 색인이 그대로 남습니다.
+    state.data[key] = id
+      ? state.data[key].map((item) => (item.id === id ? { ...item, ...payload } : item))
+      : [...state.data[key], { id: uid(table[0]), ...payload }];
     saveDemoData();
   }
 }
@@ -5193,7 +5253,10 @@ async function saveStudent(event) {
         if (error) throw error;
         await refreshData();
       } else {
-        state.data.students.push({ id: uid("s"), ...payload, password });
+        // 다른 데모 쓰기와 마찬가지로 배열을 새로 만듭니다.
+        // 지금은 students를 색인하지 않지만, 한 곳만 제자리로 바꿔두면
+        // 나중에 색인을 붙일 때 여기만 조용히 어긋납니다.
+        state.data.students = [...state.data.students, { id: uid("s"), ...payload, password }];
         saveDemoData();
       }
     }
