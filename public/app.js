@@ -52,7 +52,10 @@ const seedData = {
 };
 
 const config = window.KSIMATH_SUPABASE || {};
-const ADMIN_EMAIL = "tjddls9288@naver.com";
+// 예전에는 여기에 이메일이 박혀 있었습니다. config.adminEmail이 이미 있었는데도
+// 그 값은 로그인 칸 기본값에만 쓰고 권한 판정은 상수로 해서, 사실상 같은 값을
+// 두 군데에 두고 있었습니다. 이제 빌드가 환경변수로 넣어주는 값 하나만 봅니다.
+const ADMIN_EMAIL = String(config.adminEmail || "").trim().toLowerCase();
 const supabaseUrl = cleanSupabaseUrl(config.url || "");
 const isConfigured = Boolean(supabaseUrl && config.anonKey && !supabaseUrl.includes("YOUR_") && !config.anonKey.includes("YOUR_"));
 const supabaseClient = isConfigured && window.supabase ? window.supabase.createClient(supabaseUrl, config.anonKey) : null;
@@ -253,6 +256,8 @@ function cleanSupabaseUrl(url) {
 }
 
 function isAdminEmail(email) {
+  // 설정이 비면 둘 다 빈 문자열이 되어 아무나 통과하므로 먼저 막습니다.
+  if (!ADMIN_EMAIL) return false;
   return String(email || "").trim().toLowerCase() === ADMIN_EMAIL;
 }
 
@@ -686,7 +691,7 @@ function renderLogin() {
           <form onsubmit="login(event)">
             <div class="field">
               <label for="loginName">${adminMode && supabaseClient ? "이메일" : "이름"}</label>
-              <input id="loginName" autocomplete="username" placeholder="${adminMode && supabaseClient ? "관리자 이메일" : "이름을 입력하세요"}" value="${adminMode ? h(supabaseClient ? config.adminEmail || "teacher@example.com" : "선생님") : h(state.loginName || "")}" />
+              <input id="loginName" autocomplete="username" placeholder="${adminMode && supabaseClient ? "관리자 이메일" : "이름을 입력하세요"}" value="${adminMode ? h(supabaseClient ? ADMIN_EMAIL || "teacher@example.com" : "선생님") : h(state.loginName || "")}" />
             </div>
             <div class="field">
               <label for="loginPassword">비밀번호</label>

@@ -67,11 +67,41 @@ GitHub 저장소를 Netlify에 연결해 자동 배포합니다.
 | `SUPABASE_ANON_KEY` | 브라우저 설정 생성 + Function |
 | `SUPABASE_SERVICE_ROLE_KEY` | Function 전용. 브라우저에 나가지 않습니다 |
 | `STUDENT_SESSION_SECRET` | Function 전용. 학생 세션 서명 키 |
-| `ADMIN_EMAIL` | 선택. 로그인 화면 이메일 칸 기본값 |
+| `ADMIN_EMAIL` | 관리자 이메일. 브라우저와 Function의 관리자 판정에 쓰입니다 |
 
-`SUPABASE_URL`과 `SUPABASE_ANON_KEY`가 비어 있으면 **빌드가 실패합니다.**
-설정 없이 배포되면 앱이 데모 모드로 뜨면서 진짜 데이터가 안 보이는데,
-그 상태로 학생에게 주소가 나가는 것보다 배포가 멈추는 편이 안전하기 때문입니다.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `ADMIN_EMAIL`이 비어 있으면
+**빌드가 실패합니다.** 설정 없이 배포되면 앱이 데모 모드로 뜨거나 관리자
+로그인이 막히는데, 그 상태로 주소가 나가는 것보다 배포가 멈추는 편이
+안전하기 때문입니다.
+
+### 관리자 이메일을 바꿀 때
+
+관리자 이메일은 세 곳에서 판단합니다. **셋이 같아야 합니다.**
+
+| 어디 | 무엇을 보나 |
+|---|---|
+| 브라우저 | 빌드가 넣어준 `ADMIN_EMAIL` |
+| Netlify Function | 환경변수 `ADMIN_EMAIL` |
+| Supabase | `public.admin_email()` 함수 |
+
+앞의 둘은 같은 환경변수를 보므로 실제로는 **두 군데**만 맞추면 됩니다.
+
+1. Supabase SQL Editor에서
+
+   ```sql
+   create or replace function public.admin_email()
+   returns text language sql immutable
+   as $$ select '새주소@example.com'::text $$;
+   ```
+
+2. Netlify 환경변수 `ADMIN_EMAIL`을 같은 값으로 바꾸고 다시 배포
+
+3. Supabase `Authentication` > `Users`에서 그 이메일로 계정을 만들거나 변경
+
+둘이 어긋나면 **로그인은 되는데 데이터가 하나도 안 보이는** 상태가 됩니다.
+브라우저는 통과시켰는데 DB가 막는 경우입니다.
+
+예전에는 이 이메일이 정책과 코드 80여 곳에 문자열로 박혀 있었습니다.
 
 ### 그 뒤로는
 

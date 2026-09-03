@@ -1,7 +1,6 @@
 const crypto = require("node:crypto");
 
 const BUCKET = "photo-homework-private";
-const ADMIN_EMAIL = "tjddls9288@naver.com";
 const SESSION_SECONDS = 60 * 60 * 2;
 const REMEMBER_SESSION_SECONDS = 60 * 60 * 24 * 30;
 const SIGNED_URL_SECONDS = 300;
@@ -11,6 +10,15 @@ function env(name) {
   const value = process.env[name];
   if (!value) throw new Error(`서버 환경변수 ${name}이(가) 설정되지 않았습니다.`);
   return value.trim();
+}
+
+// 관리자 이메일은 환경변수 하나에서만 읽습니다.
+// 예전에는 이 파일에 문자열이 박혀 있어서, 이메일을 바꾸면 브라우저·서버·DB를
+// 각각 고쳐야 했고 한 군데만 빠뜨려도 조용히 어긋났습니다.
+// env()는 값이 없으면 예외를 던지므로, 설정이 빠지면 관리자 요청이
+// 통과되는 대신 실패합니다.
+function adminEmail() {
+  return env("ADMIN_EMAIL").toLowerCase();
 }
 
 function supabaseBaseUrl() {
@@ -217,7 +225,7 @@ async function requireAdmin(event) {
   const token = bearer(event);
   if (!token) throw new Error("관리자 로그인이 필요합니다.");
   const user = await request("/auth/v1/user", { token, service: false });
-  if (String(user.email || "").toLowerCase() !== ADMIN_EMAIL) throw new Error("관리자 권한이 없습니다.");
+  if (String(user.email || "").trim().toLowerCase() !== adminEmail()) throw new Error("관리자 권한이 없습니다.");
   return token;
 }
 

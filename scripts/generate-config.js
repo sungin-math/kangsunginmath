@@ -17,12 +17,13 @@ const path = require("node:path");
 
 const OUTPUT_PATH = path.join(__dirname, "..", "public", "supabase-config.js");
 
-function required(name) {
+function required(name, reason) {
   const value = (process.env[name] || "").trim();
   if (!value) {
     console.error(`\n[generate-config] 환경변수 ${name}이(가) 비어 있습니다.`);
     console.error("[generate-config] Netlify → Site configuration → Environment variables에서 등록한 뒤 다시 배포하세요.");
-    console.error("[generate-config] 이 값이 없으면 앱이 Supabase에 연결되지 않고 데모 모드로 뜨기 때문에 빌드를 중단합니다.\n");
+    console.error(`[generate-config] ${reason}`);
+    console.error("[generate-config] 조용히 잘못된 상태로 배포되는 것보다 빌드가 멈추는 편이 안전합니다.\n");
     process.exit(1);
   }
   return value;
@@ -35,12 +36,13 @@ function cleanUrl(url) {
 }
 
 const config = {
-  url: cleanUrl(required("SUPABASE_URL")),
-  anonKey: required("SUPABASE_ANON_KEY"),
+  url: cleanUrl(required("SUPABASE_URL", "이 값이 없으면 앱이 Supabase에 연결되지 않고 데모 모드로 뜹니다.")),
+  anonKey: required("SUPABASE_ANON_KEY", "이 값이 없으면 앱이 Supabase에 연결되지 않고 데모 모드로 뜹니다."),
+  // 예전에는 선택 항목이었고 로그인 칸 기본값으로만 쓰였습니다. 이제 브라우저의
+  // 관리자 판정도 이 값을 쓰므로 없으면 관리자 화면에 들어갈 수 없습니다.
+  // DB의 public.admin_email() 및 Function의 ADMIN_EMAIL과 같은 값이어야 합니다.
+  adminEmail: required("ADMIN_EMAIL", "이 값이 없으면 관리자 로그인이 통과되지 않습니다.").toLowerCase(),
 };
-
-const adminEmail = (process.env.ADMIN_EMAIL || "").trim();
-if (adminEmail) config.adminEmail = adminEmail;
 
 const contents = `// 이 파일은 빌드할 때 scripts/generate-config.js가 생성합니다.
 // 직접 고치지 마세요. 값을 바꾸려면 Netlify 환경변수를 수정하고 다시 배포합니다.

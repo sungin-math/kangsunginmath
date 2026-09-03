@@ -97,6 +97,26 @@ alter table public.student_scores enable row level security;
 alter table public.student_notes enable row level security;
 alter table public.counseling_records enable row level security;
 
+-- 관리자 이메일 단일 출처.
+-- 아래 정책들과 RPC가 모두 이 함수를 부릅니다. 예전에는 이메일 문자열이
+-- 정책마다 박혀 있어서, 바꿀 때 한 군데만 빠뜨려도 그 테이블만 조용히
+-- 권한이 어긋났습니다.
+--
+-- 정책은 행마다 평가되므로 설정 테이블을 읽는 함수로 만들면 조회할 때마다
+-- 행 수만큼 조회가 붙습니다. 상수를 돌려주는 immutable 함수는 계획 단계에서
+-- 값으로 접혀 실행 비용이 0입니다.
+--
+-- 이메일을 바꾸려면 이 함수만 고치고, Netlify 환경변수 ADMIN_EMAIL도
+-- 같은 값으로 맞춘 뒤 다시 배포하세요. (apply-admin-email-single-source.sql)
+create or replace function public.admin_email()
+returns text
+language sql
+immutable
+as $$ select 'tjddls9288@naver.com'::text $$;
+
+revoke all on function public.admin_email() from public;
+grant execute on function public.admin_email() to anon, authenticated, service_role;
+
 drop policy if exists "Anyone can read classes" on public.classes;
 drop policy if exists "Anyone can read homeworks" on public.homeworks;
 drop policy if exists "Anyone can read videos" on public.videos;
@@ -127,26 +147,26 @@ using (true);
 create policy "Admin can manage classes"
 on public.classes for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 create policy "Admin can manage students"
 on public.students for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 create policy "Admin can manage homeworks"
 on public.homeworks for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 create policy "Admin can manage videos"
 on public.videos for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 -- 학생용 INSERT 정책은 없습니다.
 --
@@ -168,26 +188,26 @@ with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com'
 create policy "Admin can manage video views"
 on public.video_views for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 create policy "Admin can manage student scores"
 on public.student_scores for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 create policy "Admin can manage student notes"
 on public.student_notes for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 create policy "Admin can manage counseling records"
 on public.counseling_records for all
 to authenticated
-using (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com')
-with check (lower(coalesce(auth.jwt() ->> 'email', '')) = 'tjddls9288@naver.com');
+using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
+with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
 drop function if exists public.login_student(text, text);
 
@@ -222,7 +242,7 @@ as $$
 declare
   new_student_id uuid;
 begin
-  if lower(coalesce(auth.jwt() ->> 'email', '')) <> 'tjddls9288@naver.com' then
+  if lower(coalesce(auth.jwt() ->> 'email', '')) <> public.admin_email() then
     raise exception '관리자 권한이 없는 계정입니다.' using errcode = '42501';
   end if;
 
@@ -254,7 +274,7 @@ security definer
 set search_path = pg_catalog, public, extensions
 as $$
 begin
-  if lower(coalesce(auth.jwt() ->> 'email', '')) <> 'tjddls9288@naver.com' then
+  if lower(coalesce(auth.jwt() ->> 'email', '')) <> public.admin_email() then
     raise exception '관리자 권한이 없는 계정입니다.' using errcode = '42501';
   end if;
 
