@@ -1346,7 +1346,22 @@ function photoStatusBadge(status) {
   return `<span class="photo-status ${className}">${label}</span>`;
 }
 
-function photoHomeworkById(id) { return state.photoData.homeworks.find((x) => x.id === id); }
+// 예전에는 호출마다 숙제 배열을 선형 탐색했습니다. 사진 통계는 배정 한 건마다
+// 이걸 부르므로 O(배정 × 숙제)가 됐고, 학생 이름을 한 글자 칠 때마다 전체
+// 재렌더로 다시 돌았습니다.
+//
+// state.photoData.homeworks는 통째로 교체되기만 하고 제자리로 바뀌지 않으므로
+// (loadPhotoAdminData) 배열 자체를 키로 캐시합니다. 새 배열이 들어오면 다시 만듭니다.
+let photoHomeworkIndexSource = null;
+let photoHomeworkIndex = new Map();
+function photoHomeworkById(id) {
+  const list = state.photoData.homeworks || [];
+  if (photoHomeworkIndexSource !== list) {
+    photoHomeworkIndex = new Map(list.map((homework) => [homework.id, homework]));
+    photoHomeworkIndexSource = list;
+  }
+  return photoHomeworkIndex.get(id);
+}
 function photoPeriodById(id) { return state.photoData.periods.find((x) => x.id === id); }
 function photoPeriodAcceptsSubmissions(period = {}) {
   const today = isoDate(new Date());
@@ -2237,6 +2252,10 @@ function sortPhotoStatsStudents(students,sort=state.photoStatsSort){
   });
 }
 
+function emptyPhotoStatusCounts(){
+  return {total:0,not_submitted:0,pending:0,completed:0,redo:0};
+}
+
 function photoStatsAdmin(){
   const today=isoDate(new Date());
   const filteredRows=filteredPhotoAssignments(state.photoStatsFilters,false);
@@ -2274,7 +2293,22 @@ function photoStatsAdmin(){
     classGroup.completed+=x.completed;
     classGroups.set(classKey,classGroup);
   });
-  const homeworkRows=state.photoData.homeworks.filter(hw=>hw.lesson_date<=today).map(hw=>{const list=rows.filter(a=>a.homework_id===hw.id);return {title:hw.title,grade:hw.grade_level,total:list.length,not_submitted:list.filter(x=>x.status==="not_submitted").length,pending:list.filter(x=>x.status==="pending").length,completed:list.filter(x=>x.status==="completed").length,redo:list.filter(x=>x.status==="redo").length}}).filter(x=>x.total);
+  // 예전에는 숙제마다 rows 전체를 훑어 list를 만들고, 거기서 상태별로 네 번 더
+  // 훑었습니다. O(5 × 숙제 × 배정)이라 학생 200명 × 숙제 100개면 배정 2만 건에
+  // 1천만 회 연산이었고, 이름을 한 글자 칠 때마다 다시 돌았습니다.
+  // 한 번만 훑어 숙제별로 모읍니다.
+  const countsByHomeworkId=new Map();
+  rows.forEach(a=>{
+    let counts=countsByHomeworkId.get(a.homework_id);
+    if(!counts){
+      counts=emptyPhotoStatusCounts();
+      countsByHomeworkId.set(a.homework_id,counts);
+    }
+    counts.total++;
+    // PHOTO_STATUS에 있는 상태만 셉니다. total과 이름이 겹칠 일이 없습니다.
+    if(PHOTO_STATUS[a.status]) counts[a.status]++;
+  });
+  const homeworkRows=state.photoData.homeworks.filter(hw=>hw.lesson_date<=today).map(hw=>({title:hw.title,grade:hw.grade_level,...(countsByHomeworkId.get(hw.id)||emptyPhotoStatusCounts())})).filter(x=>x.total);
   const summaries=[...gradeGroups.values(),...classGroups.values()];
   const sortedStudents=sortPhotoStatsStudents(students);
   return `${photoFilterMarkup("stats")}<section class="stats-summary-grid">${summaries.map(x=>{const rate=x.total?Math.round(x.completed/x.total*100):0;return `<article><span>${h(x.label)}</span><strong>${rate}%</strong><small>완성률</small></article>`}).join("")||`<article><span>현재 조건</span><strong>0%</strong><small>분모 0건</small></article>`}</section><h2 class="compact-title">학생별 완성률</h2><div class="table-scroll"><table><thead><tr><th>학생</th><th>학교</th><th>학년·반</th><th>완료/부여</th><th>완성률</th><th>미제출</th><th>확인 대기</th><th>다시 풀기</th></tr></thead><tbody>${sortedStudents.map(x=>`<tr><td>${h(x.name)}</td><td>${h(x.school)}</td><td>${x.grade} · ${h(x.className)}</td><td>${x.completed}/${x.total}</td><td>${x.total?`<strong>${x.rate}%</strong>`:`<span class="subtle">집계할 숙제 없음</span>`}</td><td>${x.not_submitted}</td><td>${x.pending}</td><td>${x.redo}</td></tr>`).join("")}</tbody></table></div><h2 class="compact-title photo-stat-title">숙제별 상태 인원</h2><div class="table-scroll"><table><thead><tr><th>숙제</th><th>학년</th><th>미제출</th><th>확인 대기</th><th>완료</th><th>다시 풀기</th></tr></thead><tbody>${homeworkRows.map(x=>`<tr><td>${h(x.title)}</td><td>${x.grade}</td><td>${x.not_submitted}</td><td>${x.pending}</td><td>${x.completed}</td><td>${x.redo}</td></tr>`).join("")}</tbody></table></div>`;
