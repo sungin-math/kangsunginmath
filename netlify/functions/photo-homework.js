@@ -354,17 +354,6 @@ async function signedUrlResultsForPhotos(photos) {
   };
 }
 
-async function signedUrlsForPhotos(photos) {
-  const urls = {};
-  const active = photos.filter((photo) => !photo.deleted_at);
-  for (let index = 0; index < active.length; index += 8) {
-    await Promise.all(active.slice(index, index + 8).map(async (photo) => {
-      urls[photo.id] = await signedDownload(photo.storage_path);
-    }));
-  }
-  return urls;
-}
-
 async function adminReviewDetail(assignmentId) {
   const assignments = await request(`/rest/v1/photo_homework_assignments?id=eq.${assignmentId}&select=*`);
   const assignment = assignments?.[0];
@@ -379,6 +368,9 @@ async function adminReviewDetail(assignmentId) {
     requestAll(`/rest/v1/photo_submission_photos?assignment_id=eq.${assignmentId}&select=*&order=uploaded_at.desc`),
     requestAll(`/rest/v1/photo_deletion_logs?assignment_id=eq.${assignmentId}&select=id,assignment_id,round_number,original_file_name,deleted_at&order=deleted_at.desc`),
   ]);
+  // 서명에 실패한 사진 한 장 때문에 검토 화면 전체가 열리지 않던 것을
+  // 바꿉니다. 실패한 것만 빼고 나머지는 그대로 보여줍니다.
+  const signed = await signedUrlResultsForPhotos(photos);
   return {
     assignment,
     homework,
@@ -386,7 +378,9 @@ async function adminReviewDetail(assignmentId) {
     rounds,
     photos,
     deletions,
-    urls: await signedUrlsForPhotos(photos),
+    urls: signed.urls,
+    failedPhotoIds: signed.failedPhotoIds,
+    signedUrlExpiresAt: signed.signedUrlExpiresAt,
   };
 }
 
@@ -706,9 +700,11 @@ exports.handler = async (event) => {
       ids.forEach((id) => requireUuid(id, "사진 ID"));
       if (!ids.length) return json(200, { urls: {} });
       const photos = await request(`/rest/v1/photo_submission_photos?id=in.(${ids.join(",")})&deleted_at=is.null&select=id,storage_path`);
-      const urls = {};
-      for (const photo of photos) urls[photo.id] = await signedDownload(photo.storage_path);
-      return json(200, { urls });
+      // 예전에는 여기서만 직렬로 서명했습니다. 한 번에 최대 100장인데
+      // 하나씩 왕복하면 Netlify Function 10초 제한에 걸릴 수 있었습니다.
+      // 학생용과 같은 헬퍼를 씁니다. 8개씩 병렬로 서명하고, 실패한 사진이
+      // 있어도 요청 전체를 실패시키지 않고 failedPhotoIds로 돌려줍니다.
+      return json(200, await signedUrlResultsForPhotos(photos));
     }
 
     return json(400, { error: "알 수 없는 요청입니다." });
