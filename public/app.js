@@ -3296,12 +3296,15 @@ function lessonJournalStudentOptions(selected) {
 function lessonJournalStudentView() {
   const filters = state.lessonJournal.filters.student;
   const studentChoices = lessonJournalStudentChoiceList();
-  if (!studentChoices.some((student) => student.id === filters.studentId)) {
-    filters.studentId = studentChoices[0]?.id || "";
-  }
+  // 고른 학생이 목록에 없으면 이번 그리기에만 첫 학생을 씁니다.
+  // 예전에는 filters.studentId에 써넣었습니다. 그리는 행위가 상태를 바꾸면
+  // 재렌더 순서에 따라 선생님이 고른 값이 조용히 사라집니다.
+  const studentId = studentChoices.some((student) => student.id === filters.studentId)
+    ? filters.studentId
+    : studentChoices[0]?.id || "";
   const sessionMap = new Map(state.lessonJournal.sessions.map((session) => [session.id, session]));
   const items = state.lessonJournal.records
-    .filter((record) => record.studentId === filters.studentId)
+    .filter((record) => record.studentId === studentId)
     .map((record) => ({ record, session: sessionMap.get(record.sessionId) }))
     .filter((item) => item.session)
     .filter((item) => !filters.from || item.session.sessionDate >= filters.from)
@@ -3311,7 +3314,7 @@ function lessonJournalStudentView() {
     ${lessonJournalFeedbackMarkup()}
     <section class="table-panel lesson-query-panel">
       <div class="lesson-journal-filters student">
-        <div class="field"><label>학생</label><select onchange="setLessonJournalFilter('student', 'studentId', this.value)"><option value="">학생 선택</option>${lessonJournalStudentOptions(filters.studentId)}</select></div>
+        <div class="field"><label>학생</label><select onchange="setLessonJournalFilter('student', 'studentId', this.value)"><option value="">학생 선택</option>${lessonJournalStudentOptions(studentId)}</select></div>
         <div class="field"><label>시작일</label><input type="date" value="${h(filters.from)}" onchange="setLessonJournalFilter('student', 'from', this.value)" /></div>
         <div class="field"><label>종료일</label><input type="date" value="${h(filters.to)}" onchange="setLessonJournalFilter('student', 'to', this.value)" /></div>
       </div>
@@ -3343,11 +3346,12 @@ function emptyLessonSummary(record) {
 function lessonJournalSummaryView() {
   const filters = state.lessonJournal.filters.summary;
   const classChoices = lessonJournalClassChoices();
-  if (!classChoices.some((item) => item.id === filters.classId)) {
-    filters.classId = classChoices[0]?.id || "";
-  }
+  // 고른 반이 목록에 없으면 이번 그리기에만 첫 반을 씁니다. 상태에 쓰지 않습니다.
+  const classId = classChoices.some((item) => item.id === filters.classId)
+    ? filters.classId
+    : classChoices[0]?.id || "";
   const sessions = state.lessonJournal.sessions
-    .filter((session) => !filters.classId || session.classId === filters.classId)
+    .filter((session) => !classId || session.classId === classId)
     .filter((session) => !filters.from || session.sessionDate >= filters.from)
     .filter((session) => !filters.to || session.sessionDate <= filters.to);
   const sessionMap = new Map(sessions.map((session) => [session.id, session]));
@@ -3368,9 +3372,9 @@ function lessonJournalSummaryView() {
       <div class="lesson-journal-filters">
         <div class="field"><label>시작일</label><input type="date" value="${h(filters.from)}" onchange="setLessonJournalFilter('summary', 'from', this.value)" /></div>
         <div class="field"><label>종료일</label><input type="date" value="${h(filters.to)}" onchange="setLessonJournalFilter('summary', 'to', this.value)" /></div>
-        <div class="field"><label>반</label><select onchange="setLessonJournalFilter('summary', 'classId', this.value)">${lessonJournalClassFilterOptions(filters.classId, false)}</select></div>
+        <div class="field"><label>반</label><select onchange="setLessonJournalFilter('summary', 'classId', this.value)">${lessonJournalClassFilterOptions(classId, false)}</select></div>
       </div>
-      <div class="lesson-query-count">${h(lessonJournalClassDisplayName(filters.classId))} · 수업 ${sessions.length}회 · 학생 ${rows.length}명</div>
+      <div class="lesson-query-count">${h(lessonJournalClassDisplayName(classId))} · 수업 ${sessions.length}회 · 학생 ${rows.length}명</div>
       ${rows.length ? `
         <div class="table-scroll lesson-summary-wrap">
           <table class="lesson-summary-table">
@@ -4448,8 +4452,11 @@ function manageSchoolScores() {
 function schoolScoreBulkView() {
   const criteria = state.schoolScoreCriteria;
   const gradeClasses = state.data.classes.filter((item) => classGradeLevel(item) === criteria.gradeLevel);
+  // 저장된 반이 더 이상 유효하지 않으면 이번 그리기에만 첫 반을 씁니다.
+  // 예전에는 이 값을 criteria에 써넣었습니다. 그리는 행위가 상태를 바꾸면
+  // 재렌더 순서에 따라 선생님이 고른 값이 조용히 사라집니다.
+  // 아래 코드와 드롭다운 모두 이 지역 변수만 봅니다.
   const classId = gradeClasses.some((item) => item.id === criteria.classId) ? criteria.classId : gradeClasses[0]?.id || "";
-  if (criteria.classId !== classId) criteria.classId = classId;
   const students = activeStudents()
     .filter((item) => item.classId === classId && studentGrade(item) === criteria.gradeLevel)
     .sort((a, b) => a.name.localeCompare(b.name, "ko"));
@@ -4570,8 +4577,9 @@ async function saveSchoolScoresBulk(event) {
 function schoolStudentReportView() {
   const filters = state.schoolReportFilters;
   const availableStudents = activeStudents();
+  // 저장된 학생이 더 이상 없으면 이번 그리기에만 첫 학생을 씁니다.
+  // 상태에 써넣지 않습니다. 아래 코드와 드롭다운 모두 이 지역 변수만 봅니다.
   const studentId = availableStudents.some((item) => item.id === filters.studentId) ? filters.studentId : availableStudents[0]?.id || "";
-  if (filters.studentId !== studentId) filters.studentId = studentId;
   const student = state.data.students.find((item) => item.id === studentId);
   const scores = schoolExamSlots().map((slot) => findSchoolScore(studentId, filters.schoolYear, filters.gradeLevel, slot.semester, slot.examType));
   const entered = scores.filter((item) => item && item.score != null);
