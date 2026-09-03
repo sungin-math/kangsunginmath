@@ -109,8 +109,18 @@ async function rateRecord(name, ip, success) {
   }
 }
 
+// 이 검사의 목적은 PostgREST 질의에 값을 끼워 넣기 전에 모양을 강제하는 것입니다.
+// (`?id=eq.${value}` 형태로 URL에 그대로 들어갑니다)
+//
+// 예전에는 RFC 4122의 버전 자리 [1-5]와 변형 자리 [89ab]까지 요구했습니다.
+// 그런데 초기에 손으로 만든 반 ID가 11111111-1111-1111-1111-111111111111
+// 같은 형태라 변형 자리가 1입니다. PostgreSQL은 정상 UUID로 받아들이는데
+// 이 검사만 거부해서, 그 반들로는 사진 숙제 반 필터가 동작하지 않았습니다.
+//
+// 버전·변형 자리는 주입 방어에 아무 역할을 하지 않습니다. 16진수와 하이픈
+// 모양만 강제하면 목적은 그대로 달성됩니다.
 function requireUuid(value, label = "ID") {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""))) throw new Error(`${label}가 올바르지 않습니다.`);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""))) throw new Error(`${label}가 올바르지 않습니다.`);
   return String(value);
 }
 
@@ -302,9 +312,9 @@ function normalizeReviewFilters(raw = {}) {
     student: String(raw.student || "").trim().slice(0, 100),
     status: String(raw.status || "").trim(),
   };
-  if (filters.periodId) requireUuid(filters.periodId, "Period ID");
-  if (filters.classId) requireUuid(filters.classId, "Class ID");
-  if (filters.homeworkId) requireUuid(filters.homeworkId, "Homework ID");
+  if (filters.periodId) requireUuid(filters.periodId, "학습 기간 ID");
+  if (filters.classId) requireUuid(filters.classId, "반 ID");
+  if (filters.homeworkId) requireUuid(filters.homeworkId, "숙제 ID");
   if (filters.status && !new Set(["not_submitted", "pending", "completed", "redo"]).has(filters.status)) {
     throw new Error("Invalid submission status.");
   }
