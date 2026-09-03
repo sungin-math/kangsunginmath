@@ -2417,16 +2417,19 @@ function studentVideos() {
       ${
         videos.length
           ? videos
-              .map(
-                (item) => `
+              .map((item) => {
+                const url = safeHttpUrl(item.url);
+                return `
                 <article class="video-card">
                   <div>
                     <h2>${h(item.title)}</h2>
                   </div>
-                  <a class="link-btn" href="${h(item.url)}" target="_blank" rel="noopener" onclick="return openVideo('${item.id}')">유튜브로 이동</a>
+                  ${url
+                    ? `<a class="link-btn" href="${h(url)}" target="_blank" rel="noopener" onclick="openVideo('${item.id}')">유튜브로 이동</a>`
+                    : `<span class="subtle">영상 주소가 올바르지 않습니다. 선생님께 알려주세요.</span>`}
                 </article>
-              `,
-              )
+              `;
+              })
               .join("")
           : `<div class="empty panel">등록된 영상이 없습니다.</div>`
       }
@@ -2434,12 +2437,28 @@ function studentVideos() {
   `;
 }
 
+// 앵커 href에 넣어도 되는 주소인지 봅니다.
+//
+// 영상 주소는 관리자만 입력하지만, input type="url"은 javascript: 같은
+// 주소도 유효한 URL로 통과시킵니다. 예전에는 onclick이 return false로
+// 앵커를 막고 있어서 그런 주소가 실행되지 않았는데, 이동을 href에
+// 맡기면서 그 방어가 사라졌습니다. 그래서 여기서 막습니다.
+function safeHttpUrl(url) {
+  const value = String(url || "").trim();
+  return /^https?:\/\//i.test(value) ? value : "";
+}
+
+// 이동은 앵커의 href가 합니다. 여기서는 기록만 남깁니다.
+//
+// 예전에는 window.open으로 직접 열고 return false로 앵커를 막았습니다.
+// href가 있는데 이동 경로를 하나 더 만든 셈인데, iOS PWA나 카카오톡
+// 인앱 브라우저처럼 window.open이 차단되는 환경에서는 앵커도 이미
+// 막혀 있어서 버튼을 눌러도 아무 일이 일어나지 않았습니다.
+//
+// target="_blank"라 현재 화면이 그대로 남으므로 기록 요청도 끊기지 않습니다.
+// 기록이 실패해도 이동은 막지 않습니다. 영상 보는 것이 먼저입니다.
 function openVideo(videoId) {
-  const video = state.data.videos.find((item) => item.id === videoId);
-  if (!video) return false;
-  window.open(video.url, "_blank", "noopener");
   recordVideoView(videoId).catch((error) => console.warn("영상 기록 저장 실패", error));
-  return false;
 }
 
 async function recordVideoView(videoId) {
@@ -5040,10 +5059,18 @@ async function saveClass(event) {
 
 async function saveVideo(event) {
   event.preventDefault();
+  const url = document.querySelector("#videoUrl").value.trim();
+  // 저장할 때도 막습니다. 학생 화면에서 걸러내면 이미 저장된 뒤라,
+  // 선생님은 왜 링크가 안 보이는지 알 수 없습니다.
+  if (!safeHttpUrl(url)) {
+    state.message = "영상 주소는 http:// 또는 https:// 로 시작해야 합니다.";
+    render();
+    return;
+  }
   const payload = {
     classId: document.querySelector("#videoClassId").value,
     title: document.querySelector("#videoTitle").value.trim(),
-    url: document.querySelector("#videoUrl").value.trim(),
+    url,
     createdAt: document.querySelector("#videoCreatedAt").value,
   };
   await submitRecord("videos", "video", payload);
