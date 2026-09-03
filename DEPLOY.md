@@ -88,6 +88,19 @@ GitHub 저장소를 Netlify에 연결해 자동 배포합니다.
 curl -s https://사이트주소/supabase-config.js | head -2
 ```
 
+### 캐시 버전은 손대지 않습니다
+
+`public/index.html`과 `public/service-worker.js`에 `?v=dev`,
+`ksimath-static-dev`가 들어 있는데 **그대로 두세요.**
+빌드할 때 `scripts/stamp-version.js`가 `public/` 내용의 해시로 바꿔 찍습니다.
+
+예전에는 배포할 때마다 사람이 다섯 군데를 손으로 맞췄고, 하나라도
+빠뜨리면 서비스워커가 옛 `app.js`를 계속 내보냈습니다. 오류가 나지 않아
+알아채기도 어려웠습니다. 이제 내용이 바뀌면 값이 자동으로 바뀝니다.
+
+혹시 버전 문자열의 형태를 바꾸면 빌드가 실패합니다. 조용히 넘어가는 것보다
+배포가 멈추는 편이 안전하기 때문입니다.
+
 ### 무엇이 실제로 공개되는가
 
 Netlify는 저장소 전체를 내려받아 빌드하지만,
