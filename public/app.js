@@ -1183,6 +1183,10 @@ function renderView() {
 }
 
 const PHOTO_API_URL = "/.netlify/functions/photo-homework";
+// 사진을 몇 장씩 동시에 올릴지. 학생들이 주로 폰에서 쓰므로 크게 잡지
+// 않습니다. 서버는 한 번에 10장까지 받습니다.
+const PHOTO_UPLOAD_CONCURRENCY = 3;
+
 const PHOTO_STATUS = {
   not_submitted: ["미제출", "status-not-submitted"],
   pending: ["확인 대기", "status-pending"],
@@ -1814,13 +1818,30 @@ async function uploadPhotoHomework(assignmentId) {
   try {
     const files = state.photoUpload.files;
     const signed = await photoApi("create-upload-urls", { assignmentId, files: files.map((f) => ({ type: f.type, size: f.size })) });
-    for (let i = 0; i < files.length; i += 1) {
-      state.photoUpload.progress = `${i + 1}/${files.length}장 업로드 중`; render();
-      const upload = signed.uploads[i];
-      const response = await fetch(upload.signedUrl, { method: "PUT", headers: { "Content-Type": files[i].type, ...(upload.token ? { "x-upsert": "false" } : {}) }, body: files[i].blob });
-      if (!response.ok) throw new Error(`${i + 1}번째 사진 업로드에 실패했습니다.`);
-      await photoApi("finalize-upload", { assignmentId, path: upload.path, originalName: files[i].name, type: files[i].type, size: files[i].size });
-      files[i].uploaded = true;
+    // 사진마다 PUT과 finalize를 순차로 기다렸습니다. 10장이면 왕복 20회를
+    // 하나씩 처리하는 셈이라 모바일 회선에서 대기가 그대로 쌓였습니다.
+    // 몇 장씩 동시에 올립니다. 너무 많이 열면 회선이 좁은 환경에서
+    // 오히려 느려지고 실패도 늘어 3으로 제한합니다.
+    let uploadedCount = 0;
+    for (let start = 0; start < files.length; start += PHOTO_UPLOAD_CONCURRENCY) {
+      const batch = files.slice(start, start + PHOTO_UPLOAD_CONCURRENCY);
+      // allSettled를 쓰는 이유: all은 첫 실패에서 바로 빠져나오는데 그때
+      // 같은 묶음의 나머지가 아직 올라가는 중입니다. 그 상태로 catch가
+      // 재시도 목록을 만들면, 실제로는 올라간 사진이 목록에 남아 두 번
+      // 올라갑니다. 묶음이 다 끝난 뒤에 실패를 던집니다.
+      const results = await Promise.allSettled(batch.map(async (file, offset) => {
+        const index = start + offset;
+        const upload = signed.uploads[index];
+        const response = await fetch(upload.signedUrl, { method: "PUT", headers: { "Content-Type": file.type, ...(upload.token ? { "x-upsert": "false" } : {}) }, body: file.blob });
+        if (!response.ok) throw new Error(`${index + 1}번째 사진 업로드에 실패했습니다.`);
+        await photoApi("finalize-upload", { assignmentId, path: upload.path, originalName: file.name, type: file.type, size: file.size });
+        file.uploaded = true;
+        uploadedCount += 1;
+        state.photoUpload.progress = `${uploadedCount}/${files.length}장 업로드 중`;
+        render();
+      }));
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) throw failed.reason;
     }
     files.forEach((f) => URL.revokeObjectURL(f.preview));
     state.photoUpload = { assignmentId: "", files: [], busy: false, progress: "" };

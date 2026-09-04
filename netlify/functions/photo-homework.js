@@ -584,17 +584,25 @@ exports.handler = async (event) => {
       if (assignment.status === "completed") throw new Error("확인 완료된 숙제입니다.");
       await requireOpenAssignment(student.id, input.assignmentId, assignment);
       const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
-      const urls = [];
-      for (const file of files) {
+      // 서명을 시작하기 전에 전부 검사합니다. 예전에는 검사와 서명이 같은
+      // 루프에 있어서, 마지막 장이 형식에 어긋나면 앞선 장들의 서명 왕복을
+      // 이미 다 하고 난 뒤에야 실패했습니다.
+      files.forEach((file) => {
         if (!allowed.has(file.type) || file.size < 1 || file.size > 10485760) throw new Error("허용되지 않은 사진 형식 또는 크기입니다.");
+      });
+      // 한 번에 최대 10장이라 한꺼번에 서명해도 부담이 없습니다.
+      // 예전에는 for 루프로 하나씩 왕복해서 10장이면 10회 순차였습니다.
+      // Promise.all은 순서를 지키므로 클라이언트가 files[i]와 uploads[i]를
+      // 짝지어 쓰는 방식은 그대로입니다.
+      const uploads = await Promise.all(files.map(async (file) => {
         const ext = file.type === "image/webp" ? "webp" : file.type === "image/png" ? "png" : "jpg";
         const path = `${student.id}/${assignment.homework_id}/${crypto.randomUUID()}.${ext}`;
         const signed = await request(`/storage/v1/object/upload/sign/${BUCKET}/${path}`, { method: "POST", body: {} });
         const signedURL = signed.url || signed.signedURL || signed.signedUrl;
         if (!signedURL) throw new Error("사진 업로드 주소를 만들지 못했습니다.");
-        urls.push({ path, token: signed.token, signedUrl: signedURL.startsWith("http") ? signedURL : `${supabaseBaseUrl()}/storage/v1${signedURL}` });
-      }
-      return json(200, { uploads: urls });
+        return { path, token: signed.token, signedUrl: signedURL.startsWith("http") ? signedURL : `${supabaseBaseUrl()}/storage/v1${signedURL}` };
+      }));
+      return json(200, { uploads });
     }
 
     if (action === "finalize-upload") {
