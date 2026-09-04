@@ -201,51 +201,74 @@ function initialStudentPhotoState(requestId = 0) {
   };
 }
 
-let state = {
-  data: structuredClone(seedData),
-  user: null,
-  role: "student",
-  view: "calendar",
-  adminMenu: { openGroup: "", mobileOpen: false, navigationId: 0 },
-  selectedClassId: null,
-  calendarDate: new Date(),
-  adminCalendarGrade: "",
-  homeworkDraftDate: "",
-  edit: null,
-  homeworkView: "upcoming",
-  studentFilters: {},
-  showArchivedStudents: false,
-  openStudentId: "",
-  recordFormType: "note",
-  recordStudentId: "",
-  recordFilters: { studentId: "", type: "all", from: "", to: "" },
-  schoolScoreView: "bulk",
-  schoolScoreCriteria: { schoolYear: new Date().getFullYear(), gradeLevel: "고1", classId: "", semester: "1학기", examType: "중간고사", maxScore: 100 },
-  schoolReportFilters: { studentId: "", schoolYear: new Date().getFullYear(), gradeLevel: "고1" },
-  schoolCompareFilters: { schoolYear: new Date().getFullYear(), gradeLevel: "고1", student: "", school: "", classId: "" },
-  photoHomeworkView: "periods",
-  photoData: { periods: [], homeworks: [], targets: [], assignments: [], rounds: [], photos: [], deletions: [] },
-  photoFilters: { periodId: "", grade: "", classId: "", homeworkId: "", student: "", status: "" },
-  photoStatsFilters: { periodId: "", grade: "", classId: "", homeworkId: "", student: "" },
-  photoStatsSort: "completion_desc",
-  photoPreview: {},
-  photoUpload: { assignmentId: "", files: [], busy: false, progress: "" },
-  photoLightbox: { ids: [], index: 0 },
-  photoReviewOpenIds: [],
-  photoReview: { items: [], page: 1, pageSize: 30, total: 0, pendingCount: 0, loading: false },
-  photoReviewRequestId: 0,
-  photoAdminRequestId: 0,
-  photoAdminLoading: false,
-  photoReviewDetails: {},
-  photoStatsLoaded: false,
-  photoSessionError: "",
-  studentPhoto: initialStudentPhotoState(),
-  videoView: { search: "", page: 1, pageSize: 50, total: 0, loading: false, requestId: 0 },
-  lessonJournal: initialLessonJournalState(),
-  weeklyReport: initialWeeklyReportState(),
-  loading: true,
-  message: "",
-};
+// 진행 중이던 요청이 늦게 도착했을 때 무시하려고 번호를 붙여 둡니다.
+// 로그아웃하면 하나 올려서 그 전에 나간 응답을 전부 무효로 만듭니다.
+// 0으로 되돌리면 옛 응답이 유효한 것으로 받아들여져 다음 사용자의 화면에
+// 끼어들 수 있습니다.
+function nextRequestId(previous) {
+  return previous === undefined || previous === null ? 0 : Number(previous) + 1;
+}
+
+// 화면 상태 전체를 만드는 한 곳입니다.
+//
+// 예전에는 logout()이 초기화할 필드를 스무 줄 넘게 손으로 나열했습니다.
+// 여기에 필드를 추가하면서 그쪽을 잊으면, 그 값만 로그아웃 뒤에도 남습니다.
+// 실제로 관리자 화면 필터 여러 개가 그렇게 남아 있었습니다.
+//
+// previous를 주면 로그아웃으로 보고 요청 번호를 이어받아 올립니다.
+function initialState(previous = null) {
+  const isReset = Boolean(previous);
+  return {
+    data: structuredClone(seedData),
+    user: null,
+    // 로그인 화면의 학생/관리자 탭입니다. 방금 나간 쪽을 그대로 보여줍니다.
+    role: previous?.role || "student",
+    view: "calendar",
+    adminMenu: { openGroup: "", mobileOpen: false, navigationId: nextRequestId(previous?.adminMenu?.navigationId) },
+    selectedClassId: null,
+    calendarDate: new Date(),
+    adminCalendarGrade: "",
+    homeworkDraftDate: "",
+    edit: null,
+    homeworkView: "upcoming",
+    studentFilters: {},
+    showArchivedStudents: false,
+    openStudentId: "",
+    recordFormType: "note",
+    recordStudentId: "",
+    recordFilters: { studentId: "", type: "all", from: "", to: "" },
+    schoolScoreView: "bulk",
+    schoolScoreCriteria: { schoolYear: new Date().getFullYear(), gradeLevel: "고1", classId: "", semester: "1학기", examType: "중간고사", maxScore: 100 },
+    schoolReportFilters: { studentId: "", schoolYear: new Date().getFullYear(), gradeLevel: "고1" },
+    schoolCompareFilters: { schoolYear: new Date().getFullYear(), gradeLevel: "고1", student: "", school: "", classId: "" },
+    photoHomeworkView: "periods",
+    photoData: { periods: [], homeworks: [], targets: [], assignments: [], rounds: [], photos: [], deletions: [] },
+    photoFilters: { periodId: "", grade: "", classId: "", homeworkId: "", student: "", status: "" },
+    photoStatsFilters: { periodId: "", grade: "", classId: "", homeworkId: "", student: "" },
+    photoStatsSort: "completion_desc",
+    photoPreview: {},
+    photoUpload: { assignmentId: "", files: [], busy: false, progress: "" },
+    photoLightbox: { ids: [], index: 0 },
+    photoReviewOpenIds: [],
+    photoReview: { items: [], page: 1, pageSize: 30, total: 0, pendingCount: 0, loading: false },
+    photoReviewRequestId: nextRequestId(previous?.photoReviewRequestId),
+    photoAdminRequestId: nextRequestId(previous?.photoAdminRequestId),
+    photoAdminLoading: false,
+    photoReviewDetails: {},
+    photoStatsLoaded: false,
+    photoSessionError: "",
+    studentPhoto: initialStudentPhotoState(nextRequestId(previous?.studentPhoto?.requestId)),
+    videoView: { search: "", page: 1, pageSize: 50, total: 0, loading: false, requestId: nextRequestId(previous?.videoView?.requestId) },
+    lessonJournal: initialLessonJournalState(),
+    weeklyReport: initialWeeklyReportState(nextRequestId(previous?.weeklyReport?.requestId)),
+    // 첫 실행은 데이터를 불러오는 중이고, 로그아웃 뒤는 바로 로그인 화면입니다.
+    // loading이 true면 렌더가 로그인 화면을 그리지 않습니다.
+    loading: !isReset,
+    message: "",
+  };
+}
+
+let state = initialState();
 
 // 검색 입력 디바운스
 //
@@ -927,47 +950,17 @@ async function login(event) {
 
 async function logout() {
   if (state.lessonJournal?.dirty && !confirmDiscardLessonJournalDraft()) return;
+
+  // 상태 밖의 뒷정리입니다. 이건 초기화만으로 되지 않습니다.
   cancelAllSearchDebounces();
-  state.photoReviewRequestId = (state.photoReviewRequestId || 0) + 1;
-  state.photoAdminRequestId = (state.photoAdminRequestId || 0) + 1;
-  state.photoAdminLoading = false;
+  (state.photoUpload?.files || []).forEach((file) => { if (file.preview) URL.revokeObjectURL(file.preview); });
+  clearPhotoStudentSession();
   if (supabaseClient && state.user?.role === "admin") await supabaseClient.auth.signOut();
   videoViewSearchSelection = { start: 0, end: 0 };
-  state.videoView = {
-    search: "",
-    page: 1,
-    pageSize: 50,
-    total: 0,
-    loading: false,
-    requestId: (state.videoView?.requestId || 0) + 1,
-  };
-  state.data.videoViews = [];
-  state.user = null;
-  state.view = "calendar";
-  state.adminMenu = {
-    openGroup: "",
-    mobileOpen: false,
-    navigationId: (state.adminMenu?.navigationId || 0) + 1,
-  };
-  state.selectedClassId = null;
-  state.edit = null;
-  clearPhotoStudentSession();
-  state.photoSessionError = "";
-  (state.photoUpload?.files || []).forEach((file) => { if (file.preview) URL.revokeObjectURL(file.preview); });
-  state.photoData = { periods: [], homeworks: [], targets: [], assignments: [], rounds: [], photos: [], deletions: [] };
-  state.photoPreview = {};
-  state.studentPhoto = initialStudentPhotoState((state.studentPhoto?.requestId || 0) + 1);
-  state.photoUpload = { assignmentId: "", files: [], busy: false, progress: "" };
-  state.photoLightbox = { ids: [], index: 0 };
-  state.photoReview = { items: [], page: 1, pageSize: 30, total: 0, pendingCount: 0, loading: false };
-  state.photoReviewDetails = {};
-  state.photoReviewOpenIds = [];
-  state.photoFilters = { periodId: "", grade: "", classId: "", homeworkId: "", student: "", status: "" };
-  state.photoStatsFilters = { periodId: "", grade: "", classId: "", homeworkId: "", student: "" };
-  state.photoStatsSort = "completion_desc";
-  state.photoStatsLoaded = false;
-  state.lessonJournal = initialLessonJournalState();
-  state.weeklyReport = initialWeeklyReportState((state.weeklyReport?.requestId || 0) + 1);
+
+  // 나머지는 상태를 통째로 새로 만듭니다. 예전에는 여기서 필드를 스무 줄
+  // 넘게 나열했는데, 그 목록에서 빠진 값들이 로그아웃 뒤에도 남아 있었습니다.
+  state = initialState(state);
   render();
 }
 
