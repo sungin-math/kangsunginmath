@@ -247,7 +247,45 @@ let state = {
   message: "",
 };
 
-let videoViewSearchTimer = null;
+// 검색 입력 디바운스
+//
+// 한글은 조합 중에도 oninput이 계속 들어옵니다. 조합이 끝나기 전에 검색을
+// 돌리면 "ㄱ", "가", "강"처럼 중간 글자로 조회가 나갑니다. composing 표시가
+// 붙어 있는 동안에는 예약만 취소하고 넘어갑니다.
+//
+// 예전에는 이 처리가 시청기록·사진검토·사진통계 세 곳에 따로 있었습니다.
+// 지연 시간이나 조합 판정을 고치려면 세 곳을 맞춰야 했고, 타이머 변수도
+// 세 개를 따로 들고 다녔습니다.
+const SEARCH_DEBOUNCE_MS = 300;
+const searchDebounceTimers = new Map();
+
+function cancelSearchDebounce(key) {
+  clearTimeout(searchDebounceTimers.get(key));
+  searchDebounceTimers.delete(key);
+}
+
+function cancelAllSearchDebounces() {
+  searchDebounceTimers.forEach((timer) => clearTimeout(timer));
+  searchDebounceTimers.clear();
+}
+
+function debounceSearchInput(key, input, run) {
+  cancelSearchDebounce(key);
+  if (input.dataset.composing === "1") return;
+  searchDebounceTimers.set(key, setTimeout(run, SEARCH_DEBOUNCE_MS));
+}
+
+// 전체 재렌더로 입력칸이 새로 만들어지므로 포커스를 되돌려주고 커서를
+// 끝으로 보냅니다.
+function refocusSearchInput(selector) {
+  requestAnimationFrame(() => {
+    const next = document.querySelector(selector);
+    if (!next) return;
+    next.focus();
+    next.setSelectionRange(next.value.length, next.value.length);
+  });
+}
+
 let videoViewSearchSelection = { start: 0, end: 0 };
 
 function cleanSupabaseUrl(url) {
@@ -889,9 +927,7 @@ async function login(event) {
 
 async function logout() {
   if (state.lessonJournal?.dirty && !confirmDiscardLessonJournalDraft()) return;
-  clearTimeout(videoViewSearchTimer);
-  clearTimeout(photoStudentFilterTimer);
-  clearTimeout(photoStatsStudentFilterTimer);
+  cancelAllSearchDebounces();
   state.photoReviewRequestId = (state.photoReviewRequestId || 0) + 1;
   state.photoAdminRequestId = (state.photoAdminRequestId || 0) + 1;
   state.photoAdminLoading = false;
@@ -1087,7 +1123,7 @@ async function go(view) {
     navigationId = state.adminMenu.navigationId;
   }
   if (previousView === "video-views" && view !== "video-views") {
-    clearTimeout(videoViewSearchTimer);
+    cancelSearchDebounce("videoView");
     state.videoView.loading = false;
     state.videoView.requestId += 1;
   }
@@ -1113,8 +1149,8 @@ async function go(view) {
   if (previousView === "photo-homework-admin" && view !== "photo-homework-admin") {
     state.photoAdminRequestId += 1;
     state.photoAdminLoading = false;
-    clearTimeout(photoStudentFilterTimer);
-    clearTimeout(photoStatsStudentFilterTimer);
+    cancelSearchDebounce("photoStudent");
+    cancelSearchDebounce("photoStats");
     clearPhotoReviewDetailCache();
   }
   if (previousView === "weekly-report" && view !== "weekly-report") {
@@ -1237,10 +1273,6 @@ async function signedPhotoUrlResults(photoIds, admin = false) {
   return { urls, failedPhotoIds: [...new Set(failedPhotoIds)], signedUrlExpiresAt };
 }
 
-async function signedPhotoUrls(photoIds, admin = false) {
-  return (await signedPhotoUrlResults(photoIds, admin)).urls;
-}
-
 async function loadStudentPhotoHomework(requestId = ++state.studentPhoto.requestId) {
   const token = getPhotoStudentSession();
   const studentId = state.user?.id;
@@ -1283,20 +1315,32 @@ async function loadStudentPhotoHomework(requestId = ++state.studentPhoto.request
   }
 }
 
-async function fetchAllSupabaseRows(table, order, ascending = true, select = "*") {
+// Supabase는 한 번에 최대 1000행만 돌려주므로 끝까지 나눠 받습니다.
+//
+// 예전에는 이 반복문이 세 벌 있었습니다.
+//   fetchAllSupabaseRows        테이블 하나를 통째로
+//   loadAllLessonJournalRows    위와 완전히 동일 (select가 "*" 고정인 것만 다름)
+//   loadWeeklyReportPagedRows   쿼리를 직접 만들어 넘기는 형태
+// 셋 다 같은 일을 하는데 끝 조건 표현만 조금씩 달랐습니다. 쪽 크기를 바꾸거나
+// 오류 처리를 고칠 때 세 곳을 맞춰야 했습니다.
+//
+// 서버(netlify/functions)의 requestAll은 supabase-js 없이 raw fetch로 도는
+// 다른 런타임이라 여기서 같이 쓸 수 없습니다.
+async function fetchAllRows(buildQuery) {
   const pageSize = 1000;
   const rows = [];
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabaseClient
-      .from(table)
-      .select(select)
-      .order(order, { ascending })
-      .range(from, from + pageSize - 1);
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
     if (error) throw error;
     rows.push(...(data || []));
-    if (!data || data.length < pageSize) break;
+    if ((data || []).length < pageSize) break;
   }
   return rows;
+}
+
+// 테이블 하나를 통째로 받는 흔한 경우를 위한 얇은 감싸개입니다.
+function fetchAllSupabaseRows(table, order, ascending = true, select = "*") {
+  return fetchAllRows(() => supabaseClient.from(table).select(select).order(order, { ascending }));
 }
 
 async function loadPhotoReviewPage(page = state.photoReview.page) {
@@ -1913,7 +1957,7 @@ async function openPhotoLightbox(photoId, admin = false) {
     }
     const assignmentId = state.photoData.photos.find((x) => x.id === photoId)?.assignment_id;
     const ids = state.photoData.photos.filter((x) => x.assignment_id === assignmentId && !x.deleted_at).map((x) => x.id);
-    if (ids.length) Object.assign(state.photoPreview, await signedPhotoUrls(ids, admin));
+    if (ids.length) Object.assign(state.photoPreview, (await signedPhotoUrlResults(ids, admin)).urls);
     state.photoLightbox = { ids, index: Math.max(0, ids.indexOf(photoId)) };
   } catch (error) { state.message = error.message; }
   render();
@@ -1926,8 +1970,8 @@ async function setPhotoAdminView(view) {
   state.photoHomeworkView = view;
   state.photoAdminLoading = false;
   state.edit = null;
-  clearTimeout(photoStudentFilterTimer);
-  clearTimeout(photoStatsStudentFilterTimer);
+  cancelSearchDebounce("photoStudent");
+  cancelSearchDebounce("photoStats");
   clearPhotoReviewDetailCache();
   if (view !== "stats") {
     state.photoData.assignments = [];
@@ -2154,8 +2198,8 @@ function photoFilterMarkup(scope = "reviews") {
   const classOptions=state.data.classes||[];
   const filterHandler=isStats?"setPhotoStatsFilter":"setPhotoFilter";
   const studentInput=isStats
-    ? `<input id="photoStatsStudentFilter" placeholder="학생 이름" value="${h(f.student)}" oncompositionstart="this.dataset.composing='1'; clearTimeout(photoStatsStudentFilterTimer)" oncompositionend="this.dataset.composing=''; setPhotoStatsStudentFilter(this)" oninput="setPhotoStatsStudentFilter(this)"/>`
-    : `<input id="photoStudentFilter" placeholder="학생 이름" value="${h(f.student)}" oncompositionstart="this.dataset.composing='1'; clearTimeout(photoStudentFilterTimer)" oncompositionend="this.dataset.composing=''; setPhotoStudentFilter(this)" oninput="setPhotoStudentFilter(this)"/>`;
+    ? `<input id="photoStatsStudentFilter" placeholder="학생 이름" value="${h(f.student)}" oncompositionstart="this.dataset.composing='1'; cancelSearchDebounce('photoStats')" oncompositionend="this.dataset.composing=''; setPhotoStatsStudentFilter(this)" oninput="setPhotoStatsStudentFilter(this)"/>`
+    : `<input id="photoStudentFilter" placeholder="학생 이름" value="${h(f.student)}" oncompositionstart="this.dataset.composing='1'; cancelSearchDebounce('photoStudent')" oncompositionend="this.dataset.composing=''; setPhotoStudentFilter(this)" oninput="setPhotoStudentFilter(this)"/>`;
   const statusFilter=isStats?"":`<select onchange="setPhotoFilter('status',this.value)"><option value="">모든 상태</option>${Object.entries(PHOTO_STATUS).map(([v,x])=>`<option value="${v}" ${f.status===v?"selected":""}>${x[0]}</option>`).join("")}</select>`;
   const sortFilter=isStats?`<select class="photo-stats-sort" aria-label="학생별 완성률 정렬" onchange="setPhotoStatsSort(this.value)">${PHOTO_STATS_SORT_OPTIONS.map(([value,label])=>`<option value="${value}" ${state.photoStatsSort===value?"selected":""}>${label}</option>`).join("")}</select>`:"";
   return `<div class="photo-filters"><select onchange="${filterHandler}('periodId',this.value)"><option value="">모든 기간</option>${state.photoData.periods.map(p=>`<option value="${p.id}" ${f.periodId===p.id?"selected":""}>${h(p.name)} · ${p.grade_level}</option>`).join("")}</select><select onchange="${filterHandler}('grade',this.value)"><option value="">모든 학년</option>${["고1","고2","고3"].map(x=>`<option ${f.grade===x?"selected":""}>${x}</option>`).join("")}</select><select onchange="${filterHandler}('classId',this.value)"><option value="">모든 반</option>${classOptions.map(c=>`<option value="${c.id}" ${f.classId===c.id?"selected":""}>${h(c.name)}</option>`).join("")}</select><select onchange="${filterHandler}('homeworkId',this.value)"><option value="">모든 숙제</option>${state.photoData.homeworks.map(hw=>`<option value="${hw.id}" ${f.homeworkId===hw.id?"selected":""}>${h(hw.title)}</option>`).join("")}</select>${studentInput}${statusFilter}${sortFilter}</div>`;
@@ -2170,36 +2214,24 @@ function clearPhotoReviewDetailCache(){
   state.photoPreview={};
   state.photoLightbox={ids:[],index:0};
 }
-let photoStudentFilterTimer = null;
 function setPhotoStudentFilter(input){
   state.photoFilters.student=input.value;
-  clearTimeout(photoStudentFilterTimer);
-  if(input.dataset.composing==="1") return;
-  photoStudentFilterTimer=setTimeout(async()=>{
+  debounceSearchInput("photoStudent", input, async () => {
     if(state.view!=="photo-homework-admin"||state.photoHomeworkView!=="reviews") return;
     clearPhotoReviewDetailCache();
     await loadPhotoReviewPage(1);
     if(state.view!=="photo-homework-admin"||state.photoHomeworkView!=="reviews") return;
     render();
-    requestAnimationFrame(()=>{
-      const next=document.querySelector("#photoStudentFilter");
-      if(next){next.focus();next.setSelectionRange(next.value.length,next.value.length);}
-    });
-  },300);
+    refocusSearchInput("#photoStudentFilter");
+  });
 }
-let photoStatsStudentFilterTimer = null;
 function setPhotoStatsStudentFilter(input){
   state.photoStatsFilters.student=input.value;
-  clearTimeout(photoStatsStudentFilterTimer);
-  if(input.dataset.composing==="1") return;
-  photoStatsStudentFilterTimer=setTimeout(()=>{
+  debounceSearchInput("photoStats", input, () => {
     if(state.view!=="photo-homework-admin"||state.photoHomeworkView!=="stats") return;
     render();
-    requestAnimationFrame(()=>{
-      const next=document.querySelector("#photoStatsStudentFilter");
-      if(next){next.focus();next.setSelectionRange(next.value.length,next.value.length);}
-    });
-  },300);
+    refocusSearchInput("#photoStatsStudentFilter");
+  });
 }
 async function setPhotoFilter(key,value){
   state.photoFilters[key]=value;
@@ -2659,22 +2691,6 @@ function lessonHomeworkLabel(value) {
   return LESSON_HOMEWORK_OPTIONS.find(([id]) => id === value)?.[1] || "제출 전";
 }
 
-async function loadAllLessonJournalRows(table, orderColumn, ascending = true) {
-  const pageSize = 1000;
-  const rows = [];
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabaseClient
-      .from(table)
-      .select("*")
-      .order(orderColumn, { ascending })
-      .range(from, from + pageSize - 1);
-    if (error) throw error;
-    rows.push(...(data || []));
-    if ((data || []).length < pageSize) break;
-  }
-  return rows;
-}
-
 // 수업일지는 두 테이블을 씁니다.
 //
 //   class_sessions          수업 회차. 반당 주 2~3회라 양이 적습니다.
@@ -2718,7 +2734,7 @@ async function loadLessonJournalSessions(force = false) {
   if (journal.sessionsLoaded && !force) return true;
   return runLessonJournalLoad("sessions", async () => {
     journal.sessions = supabaseClient
-      ? (await loadAllLessonJournalRows("class_sessions", "session_date", false)).map(normalizeClassSession)
+      ? (await fetchAllSupabaseRows("class_sessions", "session_date", false)).map(normalizeClassSession)
       : (state.data.classSessions || []).map(normalizeClassSession);
     journal.sessionsLoaded = true;
   });
@@ -2733,7 +2749,7 @@ async function loadLessonJournalRecords(force = false) {
   if (journal.recordsLoaded && !force) return true;
   return runLessonJournalLoad("records", async () => {
     journal.records = supabaseClient
-      ? (await loadAllLessonJournalRows("student_lesson_records", "created_at", true)).map(normalizeStudentLessonRecord)
+      ? (await fetchAllSupabaseRows("student_lesson_records", "created_at", true)).map(normalizeStudentLessonRecord)
       : (state.data.studentLessonRecords || []).map(normalizeStudentLessonRecord);
     journal.recordsLoaded = true;
   });
@@ -3549,23 +3565,11 @@ function normalizeWeeklyPhotoAssignment(item) {
   };
 }
 
-async function loadWeeklyReportPagedRows(buildQuery) {
-  const pageSize = 1000;
-  const rows = [];
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
-    if (error) throw error;
-    rows.push(...(data || []));
-    if ((data || []).length < pageSize) break;
-  }
-  return rows;
-}
-
 async function loadWeeklyReportRecordRows(sessionIds) {
   const rows = [];
   for (let index = 0; index < sessionIds.length; index += 80) {
     const ids = sessionIds.slice(index, index + 80);
-    const batch = await loadWeeklyReportPagedRows(() => supabaseClient
+    const batch = await fetchAllRows(() => supabaseClient
       .from("student_lesson_records")
       .select("id, session_id, student_id, student_id_snapshot, student_name_snapshot, school_snapshot, class_name_snapshot, grade_snapshot, attendance_status, homework_achievement, memo, created_at, updated_at")
       .in("session_id", ids)
@@ -3579,7 +3583,7 @@ async function loadWeeklyReportHomeworkRows(homeworkIds) {
   const rows = [];
   for (let index = 0; index < homeworkIds.length; index += 100) {
     const ids = homeworkIds.slice(index, index + 100);
-    const batch = await loadWeeklyReportPagedRows(() => supabaseClient
+    const batch = await fetchAllRows(() => supabaseClient
       .from("photo_homeworks")
       .select("id, title")
       .in("id", ids)
@@ -3654,7 +3658,7 @@ async function loadWeeklyReportSources(range) {
   // 주간 집계에 필요한 건 이번 주 세션뿐이고, 그 이전 세션은 학생별
   // "최근 3회 기록" 표시에만 쓰이므로 반별 직전 몇 회로 제한합니다.
   const [weekSessionRows, priorSessionRows] = await Promise.all([
-    loadWeeklyReportPagedRows(() => supabaseClient
+    fetchAllRows(() => supabaseClient
       .from("class_sessions")
       .select(WEEKLY_REPORT_SESSION_COLUMNS)
       .in("class_id_snapshot", classIds)
@@ -3675,7 +3679,7 @@ async function loadWeeklyReportSources(range) {
     const reviewedFrom = `${range.start}T00:00:00+09:00`;
     const reviewedBefore = `${weeklyReportAddDays(range.effectiveEnd, 1)}T00:00:00+09:00`;
     const [weeklyRows, missingReviewedRows] = await Promise.all([
-      loadWeeklyReportPagedRows(() => supabaseClient
+      fetchAllRows(() => supabaseClient
         .from("photo_homework_assignments")
         .select("id, homework_id, student_id, assigned_class_id, assigned_class_name, status, reviewed_at, created_at")
         .in("student_id", studentIds)
@@ -3683,7 +3687,7 @@ async function loadWeeklyReportSources(range) {
         .gte("reviewed_at", reviewedFrom)
         .lt("reviewed_at", reviewedBefore)
         .order("reviewed_at", { ascending: true })),
-      loadWeeklyReportPagedRows(() => supabaseClient
+      fetchAllRows(() => supabaseClient
         .from("photo_homework_assignments")
         .select("id, homework_id, student_id, assigned_class_id, assigned_class_name, status, reviewed_at, created_at")
         .in("student_id", studentIds)
@@ -4944,7 +4948,7 @@ function restoreVideoViewSearchFocus() {
 
 function beginVideoViewSearchComposition(input) {
   input.dataset.composing = "1";
-  clearTimeout(videoViewSearchTimer);
+  cancelSearchDebounce("videoView");
   rememberVideoViewSearchSelection(input);
 }
 
@@ -4953,12 +4957,10 @@ function queueVideoViewSearch(input) {
   state.videoView.page = 1;
   state.videoView.requestId += 1;
   rememberVideoViewSearchSelection(input);
-  clearTimeout(videoViewSearchTimer);
-  if (input.dataset.composing === "1") return;
-  videoViewSearchTimer = setTimeout(() => {
+  debounceSearchInput("videoView", input, () => {
     const preserveSearchFocus = document.activeElement === input;
     loadVideoViewPage(1, { preserveSearchFocus });
-  }, 300);
+  });
 }
 
 function endVideoViewSearchComposition(input) {
