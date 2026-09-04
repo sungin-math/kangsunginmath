@@ -2709,7 +2709,7 @@ async function runLessonJournalLoad(key, worker) {
     } catch (error) {
       journal.feedback = {
         type: "error",
-        text: `수업일지 데이터를 불러오지 못했습니다. Supabase에 apply-lesson-journal.sql을 먼저 적용했는지 확인해주세요. (${error.message})`,
+        text: `수업일지 데이터를 불러오지 못했습니다. Supabase에 migrations/apply-lesson-journal.sql을 먼저 적용했는지 확인해주세요. (${error.message})`,
       };
       return false;
     } finally {

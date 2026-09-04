@@ -4,17 +4,17 @@
 
 1. Supabase 대시보드에서 현재 운영 프로젝트를 엽니다.
 2. SQL Editor에서 아래 SQL 파일을 순서대로 실행합니다.
-   1. `apply-photo-homework-management.sql`
+   1. `migrations/apply-photo-homework-management.sql`
       - 사진 숙제용 기본 테이블, RLS 정책, Storage 버킷, 서버 함수 생성
-   2. `apply-photo-homework-class-dates.sql`
+   2. `migrations/apply-photo-homework-class-dates.sql`
       - 사진 숙제 수업일 2, 수업일 3 컬럼 추가
-   3. `apply-photo-homework-period-rewards.sql`
+   3. `migrations/apply-photo-homework-period-rewards.sql`
       - 학습 기간별 100% 달성 보상 문구 컬럼 추가
-   4. `apply-student-archive.sql`
+   4. `migrations/apply-student-archive.sql`
       - 학생 삭제 대신 보관·복원할 수 있는 컬럼과 보관 학생 로그인 차단 적용
-   5. `apply-photo-homework-hardening.sql`
+   5. `migrations/apply-photo-homework-hardening.sql`
       - 종료 기간 제출 차단과 제출 확인 페이지 조회용 인덱스 적용
-   6. `apply-photo-homework-stats-fix.sql`
+   6. `migrations/apply-photo-homework-stats-fix.sql`
       - 보관 학생의 신규 숙제 배정을 차단하고 사진숙제 통계 기준 보호
 3. Table Editor에 아래 6개 테이블이 생성되었는지 확인합니다.
    - `learning_periods`
@@ -30,7 +30,7 @@
 8. Storage의 `objects` 정책에 anon 또는 일반 authenticated 사용자를 전체 허용하는 광범위한 기존 정책이 없는지 확인합니다. 이 기능은 브라우저용 Storage 정책을 추가하지 않습니다.
 
 위 SQL은 기존 학생, 반, 숙제, 영상, 성적, 상담 데이터를 삭제하지 않습니다. `add column if not exists`, `create table if not exists`, `on conflict`를 사용하므로 이미 적용된 항목은 중복 생성되지 않습니다. 초기 기간 3건은 `(기간 이름, 학년)` 기준으로 중복 없이 생성됩니다.
-초기 기간만 다시 확인·생성하려면 `create-initial-photo-homework-periods.sql`을 별도로 실행해도 중복되지 않습니다.
+초기 기간만 다시 확인·생성하려면 `data-ops/create-initial-photo-homework-periods.sql`을 별도로 실행해도 중복되지 않습니다.
 
 ## 2. Netlify 환경변수
 

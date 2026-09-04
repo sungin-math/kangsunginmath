@@ -142,6 +142,8 @@ Netlify는 저장소 전체를 내려받아 빌드하지만,
 | `public/` | O | O — 학생·관리자가 쓰는 화면 |
 | `netlify/functions/` | O | 함수 URL로만 (`/.netlify/functions/...`) |
 | `scripts/` | O | X — 빌드 중에만 실행 |
+| `migrations/` | O | X — Supabase SQL Editor에서 직접 실행 |
+| `data-ops/` | O | X — 일회성 데이터 작업 |
 | `*.sql`, `*.md` | O | X |
 
 예전에는 `publish = "."` 이라 저장소 전체가 서빙됐고, SQL 마이그레이션과
@@ -158,8 +160,8 @@ Netlify가 아예 내려받지 않습니다.
 설정이 적용되지 않은 것이니 학생에게 주소를 보내지 마세요.
 
 ```
-https://사이트주소/supabase-schema.sql          → 404 여야 함
-https://사이트주소/insert-2026-g1-final-scores.sql → 404 여야 함
+https://사이트주소/supabase-schema.sql                        → 404 여야 함
+https://사이트주소/data-ops/insert-2026-g1-final-scores.sql   → 404 여야 함
 https://사이트주소/                              → 200
 https://사이트주소/app.js                        → 200
 ```

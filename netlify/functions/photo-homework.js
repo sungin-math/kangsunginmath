@@ -78,7 +78,7 @@ function sleep(ms) {
 }
 
 // 로그인 시도 제한은 실패해도 로그인을 막지 않습니다(fail open).
-// apply-login-rate-limit.sql을 적용하기 전에 배포되더라도 로그인이
+// migrations/apply-login-rate-limit.sql을 적용하기 전에 배포되더라도 로그인이
 // 전면 중단되지 않도록 하기 위해서입니다. 대신 로그에 남겨서
 // 보호가 꺼진 상태를 알아챌 수 있게 합니다.
 async function rateCheck(name, ip) {
