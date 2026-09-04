@@ -169,7 +169,7 @@ function initialLessonJournalState() {
     recordsLoaded: false,
     feedback: { type: "", text: "" },
     filters: {
-      date: { from: "", to: "", classId: "" },
+      date: { from: "", to: "", classId: "", page: 1 },
       student: { studentId: "", from: "", to: "" },
       summary: { from: "", to: "", classId: "" },
     },
@@ -1183,6 +1183,10 @@ function renderView() {
 }
 
 const PHOTO_API_URL = "/.netlify/functions/photo-homework";
+// 날짜별 조회에서 한 쪽에 보여줄 수업 회차 수.
+// 회차마다 학생 표가 통째로 붙으므로 15명 반이면 한 쪽에 150행쯤 됩니다.
+const LESSON_JOURNAL_DATE_PAGE_SIZE = 10;
+
 // 사진을 몇 장씩 동시에 올릴지. 학생들이 주로 폰에서 쓰므로 크게 잡지
 // 않습니다. 서버는 한 번에 10장까지 받습니다.
 const PHOTO_UPLOAD_CONCURRENCY = 3;
@@ -2017,8 +2021,15 @@ function photoTargetClassOptionsMarkup(grade, selectedClassIds = [], homeworkId 
   const classes = photoClassesForGrade(grade);
   const selected = new Set(selectedClassIds.map(String));
   const currentClassIds = new Set(classes.map((classItem) => String(classItem.id)));
+  // 예전에는 반마다 activeStudents()를 다시 부르고 전체 학생을 걸렀습니다.
+  // O(반 × 학생)이라 반과 학생이 늘수록 숙제 등록 화면이 무거워집니다.
+  const studentCountByClassId = new Map();
+  activeStudents().forEach((student) => {
+    const key = String(student.classId);
+    studentCountByClassId.set(key, (studentCountByClassId.get(key) || 0) + 1);
+  });
   const currentOptions = classes.map((classItem) => {
-    const studentCount = activeStudents().filter((student) => String(student.classId) === String(classItem.id)).length;
+    const studentCount = studentCountByClassId.get(String(classItem.id)) || 0;
     return `<label class="photo-target-option"><input type="checkbox" name="photoTargetClass" value="${h(classItem.id)}" ${selected.has(String(classItem.id))?"checked":""} onchange="updatePhotoTargetSummary()"/><span><strong>${h(classItem.name)}</strong><small>재학 ${studentCount}명</small></span></label>`;
   }).join("");
   const preservedOptions = homeworkId ? photoTargetRows(homeworkId)
@@ -2447,6 +2458,13 @@ function goToHomeworkRegistration(date) {
 }
 
 function studentClasses() {
+  // 예전에는 반마다 studentVisibleVideos()를 다시 불렀습니다. 그때마다 볼 수
+  // 있는 반 Set을 새로 만들고 전체 영상을 훑어서 O(반 × 영상)이었습니다.
+  // 한 번만 세어둡니다.
+  const videoCountByClassId = new Map();
+  studentVisibleVideos().forEach((video) => {
+    videoCountByClassId.set(video.classId, (videoCountByClassId.get(video.classId) || 0) + 1);
+  });
   return `
     <section class="section-head">
       <div>
@@ -2460,7 +2478,7 @@ function studentClasses() {
           (item) => `
           <button class="class-card" onclick="openClassVideos('${item.id}')">
             <h2>${h(item.name)}</h2>
-            <p class="subtle">${studentVisibleVideos().filter((video) => video.classId === item.id).length}개 영상</p>
+            <p class="subtle">${videoCountByClassId.get(item.id) || 0}개 영상</p>
           </button>
         `,
         )
@@ -2935,6 +2953,18 @@ function setLessonJournalFilter(section, field, value) {
   const filters = state.lessonJournal.filters[section];
   if (!filters || !(field in filters)) return;
   filters[field] = value;
+  // 조건이 바뀌면 목록 자체가 달라지므로 첫 쪽으로 돌아갑니다.
+  if (field !== "page" && "page" in filters) filters.page = 1;
+  render();
+}
+
+// 날짜별 조회는 조건에 맞는 수업일지를 전부 그렸습니다. 한 회차마다 학생
+// 표가 통째로 붙으므로, 필터 없이 열면 몇 년치가 한 번에 DOM에 들어갑니다.
+// 쪽수 제한은 여기서만 두고, 실제 보정은 렌더에서 합니다(§3-1과 같은 이유로
+// 그리는 도중에 상태를 바꾸지 않습니다).
+function changeLessonJournalDatePage(delta) {
+  const filters = state.lessonJournal.filters.date;
+  filters.page = Math.max(1, (Number(filters.page) || 1) + Number(delta || 0));
   render();
 }
 
@@ -3253,8 +3283,21 @@ function lessonJournalDateView() {
     .filter((session) => !filters.to || session.sessionDate <= filters.to)
     .filter((session) => !filters.classId || session.classId === filters.classId)
     .sort((a, b) => b.sessionDate.localeCompare(a.sessionDate));
+  // 쪽 번호는 상태에 있지만 보정값은 지역 변수로만 씁니다.
+  // 필터를 좁혀 총 쪽수가 줄어도 그리는 도중에 상태를 바꾸지 않습니다.
+  const totalPages = Math.max(1, Math.ceil(sessions.length / LESSON_JOURNAL_DATE_PAGE_SIZE));
+  const page = Math.min(Math.max(1, Number(filters.page) || 1), totalPages);
+  const pageStart = (page - 1) * LESSON_JOURNAL_DATE_PAGE_SIZE;
+  const pageSessions = sessions.slice(pageStart, pageStart + LESSON_JOURNAL_DATE_PAGE_SIZE);
+  const rangeStart = sessions.length ? pageStart + 1 : 0;
+  const rangeEnd = sessions.length ? pageStart + pageSessions.length : 0;
+
+  // 이 쪽에 그릴 회차의 기록만 모읍니다. 예전에는 전체 기록을 모아놓고
+  // 전부 그렸습니다.
+  const pageSessionIds = new Set(pageSessions.map((session) => session.id));
   const recordsBySession = new Map();
   state.lessonJournal.records.forEach((record) => {
+    if (!pageSessionIds.has(record.sessionId)) return;
     if (!recordsBySession.has(record.sessionId)) recordsBySession.set(record.sessionId, []);
     recordsBySession.get(record.sessionId).push(record);
   });
@@ -3266,9 +3309,9 @@ function lessonJournalDateView() {
         <div class="field"><label>종료일</label><input type="date" value="${h(filters.to)}" onchange="setLessonJournalFilter('date', 'to', this.value)" /></div>
         <div class="field"><label>반</label><select onchange="setLessonJournalFilter('date', 'classId', this.value)">${lessonJournalClassFilterOptions(filters.classId)}</select></div>
       </div>
-      <div class="lesson-query-count">총 ${sessions.length}건</div>
+      <div class="lesson-query-count">${rangeStart}–${rangeEnd} / 총 ${sessions.length}건</div>
       <div class="lesson-session-list">
-        ${sessions.length ? sessions.map((session) => {
+        ${pageSessions.length ? pageSessions.map((session) => {
           const records = (recordsBySession.get(session.id) || [])
             .slice()
             .sort((a, b) => a.studentNameSnapshot.localeCompare(b.studentNameSnapshot, "ko"));
@@ -3284,6 +3327,15 @@ function lessonJournalDateView() {
           `;
         }).join("") : `<div class="empty">조건에 맞는 수업일지가 없습니다.</div>`}
       </div>
+      ${totalPages > 1 ? `
+        <div class="list-pagination" aria-label="수업일지 페이지 이동">
+          <span>${rangeStart}–${rangeEnd} / 총 ${sessions.length}건</span>
+          <div>
+            <button type="button" class="small-btn" onclick="changeLessonJournalDatePage(-1)" ${page <= 1 ? "disabled" : ""}>이전</button>
+            <strong>${page} / ${totalPages} 페이지</strong>
+            <button type="button" class="small-btn" onclick="changeLessonJournalDatePage(1)" ${page >= totalPages ? "disabled" : ""}>다음</button>
+          </div>
+        </div>` : ""}
     </section>
   `;
 }
@@ -5011,7 +5063,7 @@ function manageVideoViews() {
       </div>
       <div class="hint">영상이 사이트 밖 유튜브에서 재생되기 때문에, 이 화면은 실제 재생 완료가 아니라 학생의 영상 링크 클릭 기록을 보여줍니다.</div>
       ${listMarkup}
-      <div class="video-view-pagination" aria-label="시청 기록 페이지 이동">
+      <div class="list-pagination" aria-label="시청 기록 페이지 이동">
         <span>${rangeStart}–${rangeEnd} / 총 ${view.total}건</span>
         <div>
           <button type="button" class="small-btn" onclick="changeVideoViewPage(-1)" ${previousDisabled ? "disabled" : ""}>이전</button>
