@@ -17,8 +17,8 @@ const IS_STANDALONE = window.matchMedia("(display-mode: standalone)").matches
 
 const seedData = {
   classes: [
-    { id: "11111111-1111-1111-1111-111111111111", name: "고1 수학 A반", gradeLevel: "고1", memo: "" },
-    { id: "22222222-2222-2222-2222-222222222222", name: "고1 수학 M반", gradeLevel: "고1", memo: "" },
+    { id: "11111111-1111-1111-1111-111111111111", name: "고1 수학 A반", gradeLevel: "고1", memo: "", weeklyReportTarget: true },
+    { id: "22222222-2222-2222-2222-222222222222", name: "고1 수학 M반", gradeLevel: "고1", memo: "", weeklyReportTarget: true },
     { id: "33333333-3333-3333-3333-333333333333", name: "고3반", gradeLevel: "고3", memo: "" },
   ],
   students: [
@@ -94,7 +94,6 @@ const ADMIN_NAV_GROUPS = [
 const ADMIN_NAV_ITEMS = [ADMIN_DASHBOARD_NAV, ...ADMIN_NAV_GROUPS.flatMap((group) => group.items)];
 const WEEKLY_REPORT_TIME_ZONE = "Asia/Seoul";
 const WEEKLY_REPORT_DAY_MS = 86400000;
-const WEEKLY_REPORT_TARGET_CLASS_NAMES = ["고1 수학 A반", "고1 수학 M반"];
 const WEEKLY_REPORT_COLLATOR = new Intl.Collator("ko-KR", { sensitivity: "base", numeric: true });
 
 function weeklyReportSeoulDateKey(value = new Date()) {
@@ -297,6 +296,8 @@ function normalizeClass(item) {
     name: item.name,
     gradeLevel: item.grade_level || item.gradeLevel || "",
     memo: item.memo || "",
+    // 주간 보고서 집계 대상인지. 예전에는 반 이름 문자열로 판단했습니다.
+    weeklyReportTarget: Boolean(item.weekly_report_target ?? item.weeklyReportTarget),
   };
 }
 
@@ -414,6 +415,7 @@ function toDb(item) {
     schoolYear: "school_year",
     gradeLevel: "grade_level",
     examType: "exam_type",
+    weeklyReportTarget: "weekly_report_target",
   };
   Object.entries(fields).forEach(([source, target]) => {
     if (source in output) {
@@ -3595,12 +3597,12 @@ const WEEKLY_REPORT_SESSION_COLUMNS = "id, class_id, class_id_snapshot, session_
 // 하한 없이 전체를 받던 예전과 달리 받아오는 양이 고정됩니다.
 const WEEKLY_REPORT_PRIOR_SESSION_LIMIT = 10;
 
-async function loadWeeklyReportPriorSessions(classIds, start) {
+async function loadWeeklyReportPriorSessions(classIds, grades, start) {
   const results = await Promise.all(classIds.map((classId) => supabaseClient
     .from("class_sessions")
     .select(WEEKLY_REPORT_SESSION_COLUMNS)
     .eq("class_id_snapshot", classId)
-    .eq("grade_snapshot", "고1")
+    .in("grade_snapshot", grades)
     .lt("session_date", start)
     .order("session_date", { ascending: false })
     .order("created_at", { ascending: false })
@@ -3613,14 +3615,23 @@ async function loadWeeklyReportPriorSessions(classIds, start) {
   return rows;
 }
 
+// 대상 반은 반 설정에서 읽습니다.
+//
+// 예전에는 반 이름 문자열("고1 수학 A반", "고1 수학 M반")로 찾았습니다.
+// 반 이름은 관리자가 언제든 바꿀 수 있는 값인데, 한 글자만 달라져도
+// 반을 못 찾아 보고서 전체가 막혔습니다.
+//
+// 학년도 "고1"로 박혀 있었습니다. 이제 대상 반들의 학년에서 끌어냅니다.
+// 그대로 뒀다면 고2 반을 대상으로 켜는 순간 조용히 빠졌을 겁니다.
 function weeklyReportTargetRoster() {
-  const targetClasses = WEEKLY_REPORT_TARGET_CLASS_NAMES.map((name) => state.data.classes.find((item) => item.name === name && item.gradeLevel === "고1"));
-  if (targetClasses.some((item) => !item)) {
-    throw new Error("고1 수학 A반과 고1 수학 M반 정보를 모두 확인할 수 없습니다. 반 이름과 학년 설정을 확인해주세요.");
+  const targetClasses = state.data.classes.filter((item) => item.weeklyReportTarget);
+  if (!targetClasses.length) {
+    throw new Error("주간 보고서 대상 반이 없습니다. 관리자 화면의 반 관리에서 대상 반을 지정해주세요.");
   }
+  const grades = [...new Set(targetClasses.map((item) => classGradeLevel(item)).filter(Boolean))];
   const classIds = new Set(targetClasses.map((item) => item.id));
   const students = activeStudents().filter((student) => classIds.has(student.classId));
-  return { targetClasses, students };
+  return { targetClasses, students, grades };
 }
 
 async function loadWeeklyReportSources(range) {
@@ -3647,12 +3658,12 @@ async function loadWeeklyReportSources(range) {
       .from("class_sessions")
       .select(WEEKLY_REPORT_SESSION_COLUMNS)
       .in("class_id_snapshot", classIds)
-      .eq("grade_snapshot", "고1")
+      .in("grade_snapshot", roster.grades)
       .gte("session_date", range.start)
       .lte("session_date", range.effectiveEnd)
       .order("session_date", { ascending: false })
       .order("created_at", { ascending: false })),
-    loadWeeklyReportPriorSessions(classIds, range.start),
+    loadWeeklyReportPriorSessions(classIds, roster.grades, range.start),
   ]);
   const sessionRows = [...weekSessionRows, ...priorSessionRows];
   const sessions = sessionRows.map(normalizeClassSession);
@@ -3778,8 +3789,11 @@ function groupWeeklyReportEntries(entries) {
 function calculateWeeklyReport(range, sources) {
   const classIds = new Set(sources.targetClasses.map((item) => item.id));
   const studentById = new Map(sources.students.map((item) => [item.id, item]));
+  // 학년도 대상 반에서 끌어냅니다. "고1"로 박아두면 대상 반의 학년이
+  // 바뀌거나 다른 학년 반을 대상으로 켤 때 조용히 빠집니다.
+  const targetGrades = new Set(sources.grades || []);
   const sessionById = new Map(sources.sessions
-    .filter((session) => classIds.has(session.classId) && session.gradeSnapshot === "고1" && session.sessionDate <= range.effectiveEnd)
+    .filter((session) => classIds.has(session.classId) && targetGrades.has(session.gradeSnapshot) && session.sessionDate <= range.effectiveEnd)
     .map((session) => [session.id, session]));
   const entries = sources.records.map((record) => ({ record, session: sessionById.get(record.sessionId) }))
     .filter((entry) => entry.session && studentById.has(entry.record.studentId));
@@ -4164,12 +4178,25 @@ function manageClasses() {
       <form onsubmit="saveClass(event)">
         <div class="field"><label>학년</label><select id="classGradeLevel" required>${gradeOptions(classGradeLevel(edit) || "고1")}</select></div>
         <div class="field"><label>반 이름</label><input id="className" required value="${h(edit?.name || "")}" /></div>
+        <label class="remember-login">
+          <input id="classWeeklyReportTarget" type="checkbox" ${edit?.weeklyReportTarget ? "checked" : ""} />
+          <span>
+            <strong>주간 보고서 대상</strong>
+            <small>이 반의 출결·숙제 기록이 주간 보고서에 집계됩니다.</small>
+          </span>
+        </label>
         ${formButtons("class")}
       </form>
     `,
     table: tableMarkup(
-      ["학년", "반 이름", "관리"],
-      state.data.classes.map((item) => [h(classGradeLevel(item) || "미지정"), h(item.name), rowButtons(`editItem('class','${item.id}')`, `deleteItem('class','${item.id}')`)]),
+      ["학년", "반 이름", "주간 보고서", "관리"],
+      state.data.classes.map((item) => [
+        h(classGradeLevel(item) || "미지정"),
+        h(item.name),
+        // 어느 반이 보고서에 잡히는지 목록에서 바로 보이게 합니다.
+        item.weeklyReportTarget ? `<span class="badge">대상</span>` : `<span class="subtle">—</span>`,
+        rowButtons(`editItem('class','${item.id}')`, `deleteItem('class','${item.id}')`),
+      ]),
     ),
   });
 }
@@ -5228,6 +5255,7 @@ async function saveClass(event) {
     name: document.querySelector("#className").value.trim(),
     gradeLevel,
     memo: "",
+    weeklyReportTarget: Boolean(document.querySelector("#classWeeklyReportTarget")?.checked),
   };
   await submitRecord("classes", "class", payload);
 }

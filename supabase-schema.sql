@@ -7,8 +7,15 @@ create table if not exists public.classes (
   name text not null,
   grade_level text not null check (grade_level in ('고1', '고2', '고3')),
   memo text default '',
+  -- 주간 보고서 집계 대상 여부. 관리자 화면의 반 수정에서 켜고 끕니다.
+  -- 예전에는 app.js에 반 이름이 문자열로 박혀 있어서, 반 이름을 바꾸면
+  -- 반을 못 찾아 보고서 전체가 막혔습니다.
+  weekly_report_target boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.classes
+  add column if not exists weekly_report_target boolean not null default false;
 
 create table if not exists public.students (
   id uuid primary key default gen_random_uuid(),
