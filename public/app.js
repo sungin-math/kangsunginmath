@@ -298,18 +298,7 @@ function debounceSearchInput(key, input, run) {
   searchDebounceTimers.set(key, setTimeout(run, SEARCH_DEBOUNCE_MS));
 }
 
-// 전체 재렌더로 입력칸이 새로 만들어지므로 포커스를 되돌려주고 커서를
-// 끝으로 보냅니다.
-function refocusSearchInput(selector) {
-  requestAnimationFrame(() => {
-    const next = document.querySelector(selector);
-    if (!next) return;
-    next.focus();
-    next.setSelectionRange(next.value.length, next.value.length);
-  });
-}
 
-let videoViewSearchSelection = { start: 0, end: 0 };
 
 function cleanSupabaseUrl(url) {
   return url.trim().replace(/\/rest\/v1\/?$/, "").replace(/\/+$/, "");
@@ -725,8 +714,47 @@ function isoDate(date) {
   return `${year}-${month}-${day}`;
 }
 
+// 화면을 통째로 다시 그리므로 포커스와 커서 위치가 매번 날아갑니다.
+// 그래서 화면마다 그것을 되살리는 코드를 따로 붙여왔습니다. 시청 기록
+// 검색이 그랬고(전역 변수 하나 + 함수 둘 + 호출부에 넘기는 플래그),
+// 사진 검토·통계 검색도 각자 방식으로 다시 포커스를 잡았습니다.
+//
+// 모든 렌더가 이 함수를 지나므로 여기서 한 번만 처리합니다.
+//
+// id가 있는 입력칸만 되살립니다. 다시 그린 뒤에도 같은 id가 있으면 그것이
+// 논리적으로 같은 칸이라고 봅니다. id가 없으면 예전처럼 아무것도 하지
+// 않으므로 그쪽 동작은 그대로입니다.
 function app(html) {
-  document.querySelector("#app").innerHTML = html;
+  const container = document.querySelector("#app");
+  const active = document.activeElement;
+  const focusedId = active && active.id && container.contains(active) ? active.id : "";
+
+  // type이 number, date 같은 입력칸은 선택 영역을 지원하지 않아 읽기만
+  // 해도 예외가 납니다. 커서 복원은 지원하는 칸에서만 합니다.
+  let selection = null;
+  if (focusedId) {
+    try {
+      selection = { start: active.selectionStart, end: active.selectionEnd };
+    } catch { selection = null; }
+  }
+
+  // 입력 중일 때만 스크롤을 되돌립니다. 화면을 옮길 때까지 붙잡으면
+  // 새 화면이 중간부터 보이게 됩니다.
+  const scrollTop = focusedId ? window.scrollY : null;
+
+  container.innerHTML = html;
+
+  if (!focusedId) return;
+  const next = document.getElementById(focusedId);
+  if (!next) return;
+  next.focus({ preventScroll: true });
+  if (selection && selection.start != null && typeof next.setSelectionRange === "function") {
+    const length = next.value?.length ?? 0;
+    try {
+      next.setSelectionRange(Math.min(selection.start, length), Math.min(selection.end, length));
+    } catch { /* 선택 영역을 지원하지 않는 입력 형식 */ }
+  }
+  if (scrollTop != null) window.scrollTo({ top: scrollTop });
 }
 
 function renderLoading() {
@@ -956,7 +984,6 @@ async function logout() {
   (state.photoUpload?.files || []).forEach((file) => { if (file.preview) URL.revokeObjectURL(file.preview); });
   clearPhotoStudentSession();
   if (supabaseClient && state.user?.role === "admin") await supabaseClient.auth.signOut();
-  videoViewSearchSelection = { start: 0, end: 0 };
 
   // 나머지는 상태를 통째로 새로 만듭니다. 예전에는 여기서 필드를 스무 줄
   // 넘게 나열했는데, 그 목록에서 빠진 값들이 로그아웃 뒤에도 남아 있었습니다.
@@ -2215,7 +2242,6 @@ function setPhotoStudentFilter(input){
     await loadPhotoReviewPage(1);
     if(state.view!=="photo-homework-admin"||state.photoHomeworkView!=="reviews") return;
     render();
-    refocusSearchInput("#photoStudentFilter");
   });
 }
 function setPhotoStatsStudentFilter(input){
@@ -2223,7 +2249,6 @@ function setPhotoStatsStudentFilter(input){
   debounceSearchInput("photoStats", input, () => {
     if(state.view!=="photo-homework-admin"||state.photoHomeworkView!=="stats") return;
     render();
-    refocusSearchInput("#photoStatsStudentFilter");
   });
 }
 async function setPhotoFilter(key,value){
@@ -4917,43 +4942,17 @@ function escapeVideoViewSearchPattern(value) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
-function rememberVideoViewSearchSelection(input) {
-  const fallback = input.value.length;
-  videoViewSearchSelection = {
-    start: input.selectionStart ?? fallback,
-    end: input.selectionEnd ?? fallback,
-  };
-}
-
-function restoreVideoViewSearchFocus() {
-  if (state.view !== "video-views") return;
-  requestAnimationFrame(() => {
-    const input = document.querySelector("#videoViewStudentSearch");
-    if (!input) return;
-    const length = input.value.length;
-    input.focus({ preventScroll: true });
-    input.setSelectionRange(
-      Math.min(videoViewSearchSelection.start, length),
-      Math.min(videoViewSearchSelection.end, length),
-    );
-  });
-}
 
 function beginVideoViewSearchComposition(input) {
   input.dataset.composing = "1";
   cancelSearchDebounce("videoView");
-  rememberVideoViewSearchSelection(input);
 }
 
 function queueVideoViewSearch(input) {
   state.videoView.search = input.value;
   state.videoView.page = 1;
   state.videoView.requestId += 1;
-  rememberVideoViewSearchSelection(input);
-  debounceSearchInput("videoView", input, () => {
-    const preserveSearchFocus = document.activeElement === input;
-    loadVideoViewPage(1, { preserveSearchFocus });
-  });
+  debounceSearchInput("videoView", input, () => loadVideoViewPage(1));
 }
 
 function endVideoViewSearchComposition(input) {
@@ -4961,7 +4960,7 @@ function endVideoViewSearchComposition(input) {
   queueVideoViewSearch(input);
 }
 
-async function loadVideoViewPage(page = state.videoView.page, { preserveSearchFocus = false } = {}) {
+async function loadVideoViewPage(page = state.videoView.page) {
   if (state.user?.role !== "admin") return;
 
   const targetPage = Math.max(1, Number(page) || 1);
@@ -4973,7 +4972,6 @@ async function loadVideoViewPage(page = state.videoView.page, { preserveSearchFo
   state.message = "";
   if (state.view === "video-views") {
     render();
-    if (preserveSearchFocus) restoreVideoViewSearchFocus();
   }
 
   try {
@@ -5017,7 +5015,7 @@ async function loadVideoViewPage(page = state.videoView.page, { preserveSearchFo
     if (requestId !== state.videoView.requestId || state.view !== "video-views") return;
     const lastPage = Math.max(1, Math.ceil(total / pageSize));
     if (targetPage > lastPage) {
-      await loadVideoViewPage(lastPage, { preserveSearchFocus });
+      await loadVideoViewPage(lastPage);
       return;
     }
     state.data.videoViews = rows;
@@ -5033,7 +5031,6 @@ async function loadVideoViewPage(page = state.videoView.page, { preserveSearchFo
   if (requestId !== state.videoView.requestId || state.view !== "video-views") return;
   state.videoView.loading = false;
   render();
-  if (preserveSearchFocus) restoreVideoViewSearchFocus();
 }
 
 async function changeVideoViewPage(delta) {
