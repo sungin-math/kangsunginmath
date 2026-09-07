@@ -1030,7 +1030,7 @@ async function logout() {
 
   // 상태 밖의 뒷정리입니다. 이건 초기화만으로 되지 않습니다.
   cancelAllSearchDebounces();
-  (state.photoUpload?.files || []).forEach((file) => { if (file.preview) URL.revokeObjectURL(file.preview); });
+  releasePhotoPreviews(state.photoUpload?.files);
   clearPhotoStudentSession();
   if (supabaseClient && state.user?.role === "admin") await supabaseClient.auth.signOut();
 
@@ -1513,9 +1513,36 @@ function photoHomeworkById(id) {
   return photoHomeworkIndex.get(id);
 }
 function photoPeriodById(id) { return state.photoData.periods.find((x) => x.id === id); }
-function photoPeriodAcceptsSubmissions(period = {}) {
+// 학습 기간은 세 가지 상태입니다. 예전에는 끝나는 날만 봤기 때문에 "예정"이
+// 없었고, 다음 학기 기간을 미리 만들어 활성으로 켜 두면 시작일 전인데도
+// 학생이 사진을 올릴 수 있었습니다.
+//
+//   closed    종료됐거나 비활성. 제출도 계획도 불가
+//   upcoming  아직 시작 안 함. 선생님은 숙제를 붙여 둘 수 있지만 제출은 불가
+//   open      제출 가능
+function photoPeriodStatus(period = {}) {
+  if (!period.id || period.is_active !== true) return "closed";
   const today = isoDate(new Date());
-  return Boolean(period.id && period.is_active === true && (!period.end_date || period.end_date >= today));
+  if (period.end_date && period.end_date < today) return "closed";
+  if (period.start_date && period.start_date > today) return "upcoming";
+  return "open";
+}
+
+function photoPeriodAcceptsSubmissions(period = {}) {
+  return photoPeriodStatus(period) === "open";
+}
+
+// 관리자가 숙제를 붙여 둘 수 있는지. 시작 전이어도 미리 계획은 세웁니다.
+function photoPeriodAcceptsPlanning(period = {}) {
+  return photoPeriodStatus(period) !== "closed";
+}
+
+// 왜 제출할 수 없는지 학생에게 말해줍니다. "종료됐다"고만 하면 시작 전인
+// 경우에 거짓말이 됩니다.
+function photoPeriodBlockedMessage(period = {}, verb = "제출할") {
+  return photoPeriodStatus(period) === "upcoming"
+    ? `아직 시작하지 않은 학습기간입니다. ${period.start_date || "시작일"}부터 사진을 ${verb} 수 있습니다.`
+    : `종료된 학습기간에는 사진을 ${verb} 수 없습니다.`;
 }
 function photoClassDates(homework = {}) {
   return [homework.lesson_date, homework.lesson_date_2, homework.lesson_date_3].filter(Boolean);
@@ -1828,8 +1855,8 @@ function studentPhotoHomework() {
 function studentPhotoHomeworkCard(assignment) {
   const homework = photoHomeworkById(assignment.homework_id) || {};
   const period = photoPeriodById(homework.period_id) || {};
-  const periodEnded = !photoPeriodAcceptsSubmissions(period);
-  const locked = assignment.status === "completed" || periodEnded;
+  const periodBlocked = !photoPeriodAcceptsSubmissions(period);
+  const locked = assignment.status === "completed" || periodBlocked;
   const selected = state.photoUpload.assignmentId === assignment.id ? state.photoUpload.files : [];
   const detailOpen = state.studentPhoto.openAssignmentIds.includes(assignment.id);
   const photoCount = Number(assignment.photo_count || 0);
@@ -1849,7 +1876,7 @@ function studentPhotoHomeworkCard(assignment) {
         <span>제출 회차 <strong>${roundCount}회</strong></span>
         <span>마지막 제출 <strong>${h(latestSubmittedAt)}</strong></span>
       </div>
-      ${locked ? `<div class="photo-lock ${periodEnded ? "period-ended" : ""}">${periodEnded ? "종료된 학습기간입니다. 기존 제출 내용만 확인할 수 있습니다." : "확인 완료된 숙제입니다."}</div>` : `
+      ${locked ? `<div class="photo-lock ${periodBlocked ? "period-ended" : ""}">${periodBlocked ? (photoPeriodStatus(period) === "upcoming" ? `아직 시작하지 않은 학습기간입니다. ${h(period.start_date || "시작일")}부터 제출할 수 있습니다.` : "종료된 학습기간입니다. 기존 제출 내용만 확인할 수 있습니다.") : "확인 완료된 숙제입니다."}</div>` : `
         <label class="photo-picker">
           <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple onchange="selectPhotoHomeworkFiles(event, ${js(assignment.id)})" />
           <span>사진 선택 또는 촬영</span><small>최대 10장 · 장당 10MB</small>
@@ -1894,24 +1921,35 @@ async function compressHomeworkImage(file) {
   return { blob, name: file.name, type: "image/webp", size: blob.size, preview: URL.createObjectURL(blob) };
 }
 
+// 미리보기는 Blob URL이라 놓아주기 전까지 브라우저가 사진을 통째로 붙들고
+// 있습니다. 사진을 다시 고를 때마다 이전 것을 놓지 않아서, 폰에서 큰 사진을
+// 여러 번 고르면 메모리가 계속 쌓였습니다.
+function releasePhotoPreviews(files) {
+  (files || []).forEach((file) => { if (file?.preview) URL.revokeObjectURL(file.preview); });
+}
+
 async function selectPhotoHomeworkFiles(event, assignmentId) {
   const files = [...event.target.files];
   event.target.value = "";
   if (files.length > 10) { alert("사진은 한 번에 최대 10장까지 선택할 수 있습니다."); return; }
+  // 새로 고르기 전에 먼저 놓아줍니다. 이 줄이 없으면 앞서 고른 사진들이
+  // 화면에서만 사라지고 메모리에는 남습니다.
+  releasePhotoPreviews(state.photoUpload?.files);
   state.photoUpload = { assignmentId, files: [], busy: true, progress: "사진을 준비하고 있습니다." }; render();
+  const prepared = [];
   try {
-    const prepared = [];
     for (const file of files) prepared.push(await compressHomeworkImage(file));
     state.photoUpload = { assignmentId, files: prepared, busy: false, progress: "" };
   } catch (error) {
+    // 다섯 번째에서 실패하면 앞의 네 장은 이미 만들어져 있습니다.
+    releasePhotoPreviews(prepared);
     state.photoUpload = { assignmentId, files: [], busy: false, progress: error.message };
   }
   render();
 }
 
 function removeSelectedPhoto(index) {
-  const removed = state.photoUpload.files.splice(index, 1)[0];
-  if (removed?.preview) URL.revokeObjectURL(removed.preview);
+  releasePhotoPreviews(state.photoUpload.files.splice(index, 1));
   render();
 }
 
@@ -1934,8 +1972,9 @@ async function uploadPhotoHomework(assignmentId) {
   if (state.photoUpload.busy || !state.photoUpload.files.length) return;
   const assignment = state.photoData.assignments.find((item) => item.id === assignmentId);
   const homework = photoHomeworkById(assignment?.homework_id);
-  if (!photoPeriodAcceptsSubmissions(photoPeriodById(homework?.period_id))) {
-    alert("종료된 학습기간에는 사진을 제출할 수 없습니다.");
+  const uploadPeriod = photoPeriodById(homework?.period_id);
+  if (!photoPeriodAcceptsSubmissions(uploadPeriod)) {
+    alert(photoPeriodBlockedMessage(uploadPeriod, "제출할"));
     return;
   }
   state.photoUpload.busy = true; state.photoUpload.progress = "업로드 준비 중"; render();
@@ -1967,12 +2006,12 @@ async function uploadPhotoHomework(assignmentId) {
       const failed = results.find((result) => result.status === "rejected");
       if (failed) throw failed.reason;
     }
-    files.forEach((f) => URL.revokeObjectURL(f.preview));
+    releasePhotoPreviews(files);
     state.photoUpload = { assignmentId: "", files: [], busy: false, progress: "" };
     await refreshStudentPhotoAssignmentAfterMutation(assignmentId);
   } catch (error) {
     const uploadedAny = state.photoUpload.files.some((file) => file.uploaded);
-    state.photoUpload.files.filter((file) => file.uploaded).forEach((file) => URL.revokeObjectURL(file.preview));
+    releasePhotoPreviews(state.photoUpload.files.filter((file) => file.uploaded));
     state.photoUpload.files = state.photoUpload.files.filter((file) => !file.uploaded);
     state.photoUpload.busy = false; state.photoUpload.progress = `실패: ${error.message} 남은 사진으로 다시 시도할 수 있습니다.`;
     if (uploadedAny) await refreshStudentPhotoAssignmentAfterMutation(assignmentId);
@@ -1993,8 +2032,9 @@ async function deleteStudentPhoto(photoId) {
     return;
   }
   const homework = photoHomeworkById(assignment?.homework_id);
-  if (!photoPeriodAcceptsSubmissions(photoPeriodById(homework?.period_id))) {
-    alert("종료된 학습기간에는 사진을 삭제할 수 없습니다.");
+  const deletePeriod = photoPeriodById(homework?.period_id);
+  if (!photoPeriodAcceptsSubmissions(deletePeriod)) {
+    alert(photoPeriodBlockedMessage(deletePeriod, "삭제할"));
     return;
   }
   if (!confirm("이 사진을 삭제할까요? 삭제 기록은 선생님에게 표시됩니다.")) return;
@@ -2094,12 +2134,12 @@ function managePhotoHomework() {
 
 function photoPeriodAdmin() {
   const edit = state.edit?.type === "learning-period" ? state.photoData.periods.find((x) => x.id === state.edit.id) : null;
-  return `<div class="admin-layout"><form class="form-panel" onsubmit="saveLearningPeriod(event)"><h2>${edit?"학습 기간 수정":"학습 기간 추가"}</h2><div class="field"><label>기간 이름</label><input id="periodName" required value="${h(edit?.name||"")}" /></div><div class="field"><label>대상 학년</label><select id="periodGrade">${["고1","고2","고3"].map(x=>`<option ${edit?.grade_level===x?"selected":""}>${x}</option>`).join("")}</select></div><div class="field"><label>시작일</label><input id="periodStart" type="date" required value="${edit?.start_date||""}" /></div><div class="field"><label>종료일</label><input id="periodEnd" type="date" required value="${edit?.end_date||""}" /></div><div class="period-reward-fields"><h3>100% 달성 보상</h3><p>보상명이 비어 있으면 학생 화면에 표시하지 않습니다.</p><div class="field"><label>보상명</label><input id="periodRewardTitle" placeholder="예: 간식 쿠폰" value="${h(edit?.reward_title||"")}" /></div><div class="field"><label>100% 전 안내 문구</label><textarea id="periodRewardBefore" rows="2" placeholder="예: 이번 기간을 100% 완료하면 간식 쿠폰을 받을 수 있어요.">${h(edit?.reward_before_message||"")}</textarea></div><div class="field"><label>100% 달성 문구</label><textarea id="periodRewardAchieved" rows="2" placeholder="예: 축하합니다! 간식 쿠폰 지급 대상입니다.">${h(edit?.reward_achieved_message||"")}</textarea></div></div><label class="check-line"><input id="periodActive" type="checkbox" ${edit?.is_active!==false?"checked":""}/> 활성 기간</label><button class="primary-btn">저장</button>${edit?`<button type="button" class="secondary-btn" onclick="cancelEdit()">취소</button>`:""}</form><div class="grid-list photo-admin-list">${state.photoData.periods.map(p=>`<article class="item-card"><div><strong>${h(p.name)}</strong><p>${p.grade_level} · ${p.start_date}~${p.end_date}</p>${p.reward_title?`<small>완주 보상: ${h(p.reward_title)}</small>`:""}${photoPeriodAcceptsSubmissions(p)?`<span class="photo-status status-completed">활성</span>`:`<span class="photo-status status-not-submitted">종료</span>`}</div><div class="item-actions"><button onclick="editItem('learning-period',${js(p.id)})">수정</button></div></article>`).join("")||`<div class="empty">등록된 기간이 없습니다.</div>`}</div></div>`;
+  return `<div class="admin-layout"><form class="form-panel" onsubmit="saveLearningPeriod(event)"><h2>${edit?"학습 기간 수정":"학습 기간 추가"}</h2><div class="field"><label>기간 이름</label><input id="periodName" required value="${h(edit?.name||"")}" /></div><div class="field"><label>대상 학년</label><select id="periodGrade">${["고1","고2","고3"].map(x=>`<option ${edit?.grade_level===x?"selected":""}>${x}</option>`).join("")}</select></div><div class="field"><label>시작일</label><input id="periodStart" type="date" required value="${edit?.start_date||""}" /></div><div class="field"><label>종료일</label><input id="periodEnd" type="date" required value="${edit?.end_date||""}" /></div><div class="period-reward-fields"><h3>100% 달성 보상</h3><p>보상명이 비어 있으면 학생 화면에 표시하지 않습니다.</p><div class="field"><label>보상명</label><input id="periodRewardTitle" placeholder="예: 간식 쿠폰" value="${h(edit?.reward_title||"")}" /></div><div class="field"><label>100% 전 안내 문구</label><textarea id="periodRewardBefore" rows="2" placeholder="예: 이번 기간을 100% 완료하면 간식 쿠폰을 받을 수 있어요.">${h(edit?.reward_before_message||"")}</textarea></div><div class="field"><label>100% 달성 문구</label><textarea id="periodRewardAchieved" rows="2" placeholder="예: 축하합니다! 간식 쿠폰 지급 대상입니다.">${h(edit?.reward_achieved_message||"")}</textarea></div></div><label class="check-line"><input id="periodActive" type="checkbox" ${edit?.is_active!==false?"checked":""}/> 활성 기간</label><button class="primary-btn">저장</button>${edit?`<button type="button" class="secondary-btn" onclick="cancelEdit()">취소</button>`:""}</form><div class="grid-list photo-admin-list">${state.photoData.periods.map(p=>`<article class="item-card"><div><strong>${h(p.name)}</strong><p>${p.grade_level} · ${p.start_date}~${p.end_date}</p>${p.reward_title?`<small>완주 보상: ${h(p.reward_title)}</small>`:""}${{open:`<span class="photo-status status-completed">활성</span>`,upcoming:`<span class="photo-status status-pending">예정</span>`,closed:`<span class="photo-status status-not-submitted">종료</span>`}[photoPeriodStatus(p)]}</div><div class="item-actions"><button onclick="editItem('learning-period',${js(p.id)})">수정</button></div></article>`).join("")||`<div class="empty">등록된 기간이 없습니다.</div>`}</div></div>`;
 }
 
 function photoHomeworkAdmin() {
   const edit = state.edit?.type === "photo-homework" ? state.photoData.homeworks.find((x) => x.id === state.edit.id) : null;
-  const periods = state.photoData.periods.filter((p) => photoPeriodAcceptsSubmissions(p) || p.id === edit?.period_id);
+  const periods = state.photoData.periods.filter((p) => photoPeriodAcceptsPlanning(p) || p.id === edit?.period_id);
   const lessonDates = [edit?.lesson_date || "", edit?.lesson_date_2 || "", edit?.lesson_date_3 || ""];
   const selectedTargetClassIds = edit ? photoTargetClassIds(edit.id) : [];
   const targetGrade = edit?.grade_level || "";
@@ -2554,13 +2594,24 @@ function setAdminCalendarGrade(grade) {
   render();
 }
 
-function goToHomeworkRegistration(date) {
+async function goToHomeworkRegistration(date) {
   if (state.user?.role !== "admin" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
   const selectedDate = new Date(`${date}T00:00:00`);
   if (Number.isNaN(selectedDate.getTime()) || isoDate(selectedDate) !== date) return;
   state.homeworkDraftDate = date;
   state.homeworkView = date < isoDate(new Date()) ? "past" : "upcoming";
-  return go("homework-admin");
+  await go("homework-admin");
+
+  // 화면만 바꾸면 스크롤 위치가 그대로 남습니다. 대시보드는 길어서 아래쪽
+  // 날짜를 누르면, 숙제 등록 폼은 맨 위에 있는데 화면은 중간에 머물러
+  // 아무 일도 안 일어난 것처럼 보였습니다.
+  //
+  // app()의 스크롤 복원은 포커스가 남아 있을 때만 도는데, 화면을 바꾸면
+  // 포커스가 사라지므로 여기서 직접 올립니다.
+  window.scrollTo({ top: 0 });
+  // 누른 날짜가 이미 채워져 있으니 커서는 숙제 내용으로 보냅니다.
+  // 바로 타이핑을 시작할 수 있습니다.
+  document.getElementById("homeworkContent")?.focus({ preventScroll: true });
 }
 
 function studentClasses() {

@@ -70,7 +70,7 @@ GitHub 저장소를 Netlify에 연결해 자동 배포합니다.
    > 저장소가 자동 생성되어 이틀간 공개됐고, 동시에 push한 코드가 배포되지
    > 않아 로그인 시도 제한이 적용되지 않은 상태였습니다.
 3. 빌드 설정은 `netlify.toml`에 이미 들어 있으므로 그대로 둡니다.
-   - Build command: `node scripts/generate-config.js`
+   - Build command: `node scripts/generate-config.js && node scripts/stamp-version.js`
    - Publish directory: `public`
    - Functions directory: `netlify/functions`
 4. `Site configuration` > `Environment variables`에 아래를 등록합니다.

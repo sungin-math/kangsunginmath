@@ -222,11 +222,18 @@ async function requireOpenAssignment(studentId, assignmentId, existingAssignment
   const homeworks = await request(`/rest/v1/photo_homeworks?id=eq.${assignment.homework_id}&select=id,period_id`);
   const homework = homeworks?.[0];
   const periods = homework
-    ? await request(`/rest/v1/learning_periods?id=eq.${homework.period_id}&select=id,is_active,end_date`)
+    ? await request(`/rest/v1/learning_periods?id=eq.${homework.period_id}&select=id,is_active,start_date,end_date`)
     : [];
   const period = periods?.[0];
-  if (!period || period.is_active !== true || String(period.end_date || "") < seoulToday()) {
+  const today = seoulToday();
+  if (!period || period.is_active !== true || String(period.end_date || "") < today) {
     throw new Error("\uc885\ub8cc\ub41c \ud559\uc2b5\uae30\uac04\uc785\ub2c8\ub2e4. \uc0ac\uc9c4\uc744 \ucd94\uac00\ud558\uac70\ub098 \uc0ad\uc81c\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.");
+  }
+  // \ub05d\ub098\ub294 \ub0a0\ub9cc \ubcf4\uace0 \uc2dc\uc791\ud558\ub294 \ub0a0\uc740 \uc544\ubb34\ub3c4 \uc548 \ubd24\uc2b5\ub2c8\ub2e4. \ub2e4\uc74c \ud559\uae30 \uae30\uac04\uc744
+  // \ubbf8\ub9ac \ub9cc\ub4e4\uc5b4 \ud65c\uc131\uc73c\ub85c \ucf1c \ub450\uba74, \uc2dc\uc791 \uc804\uc778\ub370\ub3c4 \ud559\uc0dd\uc774 \uc0ac\uc9c4\uc744 \uc62c\ub9b4 \uc218
+  // \uc788\uc5c8\uc2b5\ub2c8\ub2e4. \ube0c\ub77c\uc6b0\uc800\uc5d0\ub3c4 \uac80\uc0ac\uac00 \uc5c6\uc5b4 \uc11c\ubc84\uac00 \uc720\uc77c\ud55c \ubc29\uc5b4\uc785\ub2c8\ub2e4.
+  if (String(period.start_date || "") > today) {
+    throw new Error("\uc544\uc9c1 \uc2dc\uc791\ud558\uc9c0 \uc54a\uc740 \ud559\uc2b5\uae30\uac04\uc785\ub2c8\ub2e4. \uc2dc\uc791\uc77c\ubd80\ud130 \uc0ac\uc9c4\uc744 \uc62c\ub9b4 \uc218 \uc788\uc2b5\ub2c8\ub2e4.");
   }
   return { assignment, homework, period };
 }
@@ -727,7 +734,7 @@ exports.handler = async (event) => {
       if (!ids.length) return json(200, { urls: {} });
       const photos = await request(`/rest/v1/photo_submission_photos?id=in.(${ids.join(",")})&deleted_at=is.null&select=id,storage_path`);
       // 예전에는 여기서만 직렬로 서명했습니다. 한 번에 최대 100장인데
-      // 하나씩 왕복하면 Netlify Function 10초 제한에 걸릴 수 있었습니다.
+      // 하나씩 왕복하면 Netlify Function 실행 시간 제한에 걸릴 수 있었습니다.
       // 학생용과 같은 헬퍼를 씁니다. 8개씩 병렬로 서명하고, 실패한 사진이
       // 있어도 요청 전체를 실패시키지 않고 failedPhotoIds로 돌려줍니다.
       return json(200, await signedUrlResultsForPhotos(photos));
