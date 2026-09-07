@@ -186,6 +186,20 @@ Netlify는 예전 배포를 지우지 않고 각각 고유 주소로 보관합�
 `publish`를 바꾸기 전에 만들어진 배포에는 SQL 파일이 그대로 남아 있으므로,
 Netlify 대시보드 `Deploys`에서 과거 배포를 삭제해야 완전히 닫힙니다.
 
+2026-06에 `publish = "."`로 올린 **수동 배포 14개**가 여기 해당합니다.
+각 배포의 고유 주소에서 `/supabase-schema.sql`이 아직 200으로 내려받아집니다.
+지우려면 대시보드에서 열네 번 반복하거나, 아래 스크립트를 쓰세요.
+
+```
+NETLIFY_TOKEN=발급받은토큰 bash scripts/delete-old-netlify-deploys.sh
+```
+
+토큰은 https://app.netlify.com/user/applications#personal-access-tokens 에서
+만듭니다. 지울 배포 ID가 스크립트 안에 박혀 있어 다른 배포는 건드리지
+않으며, 지운 뒤 전부 404인지 스스로 확인합니다.
+
+**다 지우고 나면 스크립트도 지우세요.** 한 번 쓰는 것입니다.
+
 ## 4. 로그인 방식
 
 - 학생: 선생님이 사이트 관리자 화면에서 만든 `이름 / 비밀번호`로 로그인합니다.
