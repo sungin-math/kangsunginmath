@@ -3543,6 +3543,9 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  /* 영상 관리에서는 검색·반·기간 세 칸이 들어갑니다. 좁은 화면에서
+     한 줄에 다 못 들어가면 접히게 둡니다. */
+  flex-wrap: wrap;
   gap: 14px;
   margin-bottom: 14px;
   padding: 14px 16px;
@@ -3558,6 +3561,10 @@ body {
   min-width: 0;
 }
 
+.video-view-search.narrow {
+  width: min(180px, 100%);
+}
+
 .video-view-search label {
   color: #516777;
   font-size: 12px;
@@ -3565,6 +3572,7 @@ body {
 }
 
 .video-view-search input,
+.video-view-search select,
 input.video-view-search {
   width: 100%;
   min-width: 0;
@@ -3577,6 +3585,7 @@ input.video-view-search {
 }
 
 .video-view-search input:focus,
+.video-view-search select:focus,
 input.video-view-search:focus {
   outline: 0;
   border-color: #6c8aa1;

@@ -46,8 +46,25 @@ create table if not exists public.videos (
   class_id uuid references public.classes(id) on delete cascade,
   title text not null,
   url text not null,
-  created_at date not null default current_date
+  created_at date not null default current_date,
+  -- 같은 반에 같은 주소를 두 번 등록하지 못하게 합니다. 등록 버튼을 두 번
+  -- 누르면 실제로 중복이 생겼습니다. 반이 다르면 같은 영상을 올릴 수 있게
+  -- 반까지 묶어서 봅니다. 자세한 사정은
+  -- migrations/apply-video-duplicate-guard.sql에 적어 뒀습니다.
+  constraint videos_class_id_url_key unique (class_id, url)
 );
+
+-- 이미 만들어져 있는 DB를 위해 따로 한 번 더 겁니다.
+-- create table if not exists는 표가 있으면 제약을 추가하지 않습니다.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.videos'::regclass and conname = 'videos_class_id_url_key'
+  ) then
+    alter table public.videos add constraint videos_class_id_url_key unique (class_id, url);
+  end if;
+end $$;
 
 create table if not exists public.video_views (
   id uuid primary key default gen_random_uuid(),

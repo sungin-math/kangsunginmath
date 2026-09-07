@@ -228,6 +228,12 @@ function initialState(previous = null) {
     selectedClassId: null,
     // 영상 목록을 어느 날짜부터 받아왔는지. 학생일 때만 채워집니다.
     videoCutoff: "",
+    // 관리자 영상 관리 화면의 찾기 조건입니다. 영상은 수업마다 쌓이므로
+    // 기본을 최근 3개월로 두고, 필요하면 전체로 넓힙니다.
+    videoFilters: { search: "", classId: "", months: "3" },
+    // 저장 중인 폼의 종류입니다. 느린 통신에서 등록 버튼을 두 번 누르면
+    // 같은 것이 두 개 만들어져서, 저장이 끝날 때까지 막습니다.
+    formBusy: "",
     calendarDate: new Date(),
     adminCalendarGrade: "",
     homeworkDraftDate: "",
@@ -488,14 +494,18 @@ function toDb(item) {
 // 같이 잘라내면 관리자 화면에 "삭제된 영상"이라고 뜨는데, 사실이 아닙니다.
 const STUDENT_VIDEO_MONTHS = 2;
 
-function studentVideoCutoffDate() {
+function isoDateMonthsAgo(months) {
   const now = new Date();
-  const target = new Date(now.getFullYear(), now.getMonth() - STUDENT_VIDEO_MONTHS, 1);
+  const target = new Date(now.getFullYear(), now.getMonth() - months, 1);
   // 목표 달에 없는 날짜가 나오는 경우를 막습니다. 4월 30일에서 두 달을 빼면
   // 2월 30일인데, 그대로 두면 3월 초로 넘어가 오히려 범위가 좁아집니다.
   const lastDayOfTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
   target.setDate(Math.min(now.getDate(), lastDayOfTargetMonth));
   return isoDate(target);
+}
+
+function studentVideoCutoffDate() {
+  return isoDateMonthsAgo(STUDENT_VIDEO_MONTHS);
 }
 
 async function refreshData() {
@@ -4272,9 +4282,12 @@ function manageClasses() {
 
 function manageVideos() {
   const edit = state.edit?.type === "video" ? state.data.videos.find((item) => item.id === state.edit.id) : null;
+  const filters = state.videoFilters;
+  const shown = filteredAdminVideos();
+  const total = state.data.videos.length;
   return adminCrudLayout({
     title: "영상 관리",
-    description: "반별 수업 영상 링크를 등록합니다.",
+    description: "반별 수업 영상 링크를 등록합니다. 수업마다 쌓이므로 기본은 최근 3개월만 보여줍니다.",
     formTitle: edit ? "영상 수정" : "새 영상 등록",
     form: `
       <form onsubmit="saveVideo(event)">
@@ -4285,19 +4298,85 @@ function manageVideos() {
         ${formButtons("video")}
       </form>
     `,
-    table: tableMarkup(
-      ["반", "영상 제목", "등록일", "관리"],
-      state.data.videos
-        .slice()
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .map((item) => [
+    table: `
+      <div class="video-view-toolbar">
+        <div class="video-view-search">
+          <label for="videoAdminSearch">제목 검색</label>
+          <input id="videoAdminSearch" type="search" value="${h(filters.search)}" placeholder="예: 8월9일, 고1M A3, 2교시" autocomplete="off"
+            oncompositionstart="beginVideoAdminSearchComposition(this)"
+            oncompositionend="endVideoAdminSearchComposition(this)"
+            oninput="queueVideoAdminSearch(this)" />
+        </div>
+        <div class="video-view-search narrow">
+          <label for="videoAdminClass">반</label>
+          <select id="videoAdminClass" onchange="setVideoAdminFilter('classId', this.value)">
+            <option value="">전체 반</option>
+            ${state.data.classes.map((item) => `<option value="${item.id}" ${filters.classId === item.id ? "selected" : ""}>${h(item.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="video-view-search narrow">
+          <label for="videoAdminMonths">기간</label>
+          <select id="videoAdminMonths" onchange="setVideoAdminFilter('months', this.value)">
+            ${[["3", "최근 3개월"], ["6", "최근 6개월"], ["12", "최근 1년"], ["", "전체"]]
+              .map(([value, label]) => `<option value="${value}" ${filters.months === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </div>
+        <span class="subtle">전체 ${total}개 중 <strong>${shown.length}개</strong></span>
+      </div>
+      ${shown.length || !total ? "" : `<div class="hint">조건에 맞는 영상이 없습니다. 기간을 <strong>전체</strong>로 바꾸거나 검색어를 지워 보세요.</div>`}
+      ${tableMarkup(
+        ["반", "영상 제목", "등록일", "관리"],
+        shown.map((item) => [
           `<span class="badge">${h(className(item.classId))}</span>`,
           `<a href="${h(item.url)}" target="_blank" rel="noopener">${h(item.title)}</a>`,
           item.createdAt,
           rowButtons(`editItem('video','${item.id}')`, `deleteItem('video','${item.id}')`),
         ]),
-    ),
+      )}
+    `,
   });
+}
+
+// 제목이 "8월9일 일요일 고1M A3 1교시" 같은 형태라, 띄어쓰기를 넣고 치든
+// 빼고 치든 찾아지게 공백을 지우고 견줍니다. "고1MA3"으로도 걸립니다.
+function videoSearchKey(text) {
+  return String(text || "").toLowerCase().replace(/\s+/g, "");
+}
+
+function filteredAdminVideos() {
+  const { search, classId, months } = state.videoFilters;
+  const needle = videoSearchKey(search);
+  const cutoff = months ? isoDateMonthsAgo(Number(months)) : "";
+  return state.data.videos
+    .filter((item) => {
+      if (classId && item.classId !== classId) return false;
+      if (cutoff && String(item.createdAt || "") < cutoff) return false;
+      if (!needle) return true;
+      // 반 이름으로도 찾을 수 있게 합니다. 제목에 반이 안 적힌 영상이 있습니다.
+      return videoSearchKey(`${item.title} ${className(item.classId)}`).includes(needle);
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function beginVideoAdminSearchComposition(input) {
+  input.dataset.composing = "1";
+  cancelSearchDebounce("videoAdmin");
+}
+
+function queueVideoAdminSearch(input) {
+  state.videoFilters.search = input.value;
+  debounceSearchInput("videoAdmin", input, render);
+}
+
+function endVideoAdminSearchComposition(input) {
+  input.dataset.composing = "";
+  queueVideoAdminSearch(input);
+}
+
+function setVideoAdminFilter(key, value) {
+  cancelSearchDebounce("videoAdmin");
+  state.videoFilters[key] = value;
+  render();
 }
 
 function manageHomeworks() {
@@ -5168,10 +5247,14 @@ function classSelect(id, selected) {
 }
 
 function formButtons(type) {
+  // 저장이 끝날 때까지 버튼을 잠급니다. 예전에는 느린 통신에서 등록을 두 번
+  // 누르면 반이나 영상이 실제로 두 개 만들어졌습니다. 운영 DB에도 그렇게
+  // 생긴 영상이 두 건 있었습니다.
+  const busy = state.formBusy === type;
   return `
     <div class="form-actions">
-      <button class="primary-btn" type="submit">${state.edit?.type === type ? "수정 저장" : "등록"}</button>
-      ${state.edit?.type === type ? `<button class="ghost-btn" type="button" onclick="cancelEdit()">취소</button>` : ""}
+      <button class="primary-btn" type="submit" ${busy ? "disabled" : ""}>${busy ? "저장 중…" : (state.edit?.type === type ? "수정 저장" : "등록")}</button>
+      ${state.edit?.type === type ? `<button class="ghost-btn" type="button" onclick="cancelEdit()" ${busy ? "disabled" : ""}>취소</button>` : ""}
     </div>
   `;
 }
@@ -5386,6 +5469,13 @@ async function saveStudent(event) {
   };
   const id = state.edit?.type === "student" ? state.edit.id : null;
 
+  // 학생 등록은 submitRecord를 거치지 않고 RPC를 직접 부르므로 여기서도
+  // 같은 잠금이 필요합니다. 두 번 눌리면 이름이 같은 학생이 두 명 생기고,
+  // 그때부터는 로그인할 때 학교로도 구분이 되지 않습니다.
+  if (state.formBusy) return;
+  state.formBusy = "student";
+  render();
+
   try {
     if (id) {
       await writeRecord("students", payload, id);
@@ -5411,9 +5501,10 @@ async function saveStudent(event) {
     state.edit = null;
     state.openStudentId = "";
     state.message = "";
-    render();
   } catch (error) {
-    state.message = error.message;
+    state.message = duplicateRecordMessage(error, "student") || error.message;
+  } finally {
+    state.formBusy = "";
     render();
   }
 }
@@ -5444,17 +5535,31 @@ async function resetStudentPassword(event, studentId) {
 }
 
 async function submitRecord(table, type, payload) {
+  // 버튼을 잠그는 것만으로는 부족합니다. 두 번째 클릭이 다시 그려지기 전에
+  // 들어올 수 있어서, 실제로 막는 것은 이 줄입니다.
+  if (state.formBusy) return;
+  state.formBusy = type;
+  render();
   try {
     const id = state.edit?.type === type ? state.edit.id : null;
     await writeRecord(table, payload, id);
     state.edit = null;
     if (type === "student") state.openStudentId = "";
     state.message = "";
-    render();
   } catch (error) {
-    state.message = error.message;
+    state.message = duplicateRecordMessage(error, type) || error.message;
+  } finally {
+    state.formBusy = "";
     render();
   }
+}
+
+// DB의 unique 제약에 걸렸을 때 나오는 말은 사람이 읽을 것이 못 됩니다.
+// 예: duplicate key value violates unique constraint "videos_class_id_url_key"
+function duplicateRecordMessage(error, type) {
+  if (error?.code !== "23505") return "";
+  if (type === "video") return "이 반에 같은 주소의 영상이 이미 등록되어 있습니다.";
+  return "이미 등록된 항목입니다.";
 }
 
 window.addEventListener("beforeunload", (event) => {
