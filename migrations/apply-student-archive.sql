@@ -1,3 +1,13 @@
+-- ⚠ 이 파일을 다시 실행하지 마세요.
+--
+-- 아래에 옛 login_student(text, text)를 만들고 anon에게 실행 권한을 주는
+-- 구문이 남아 있습니다. 그 함수가 있으면 브라우저가 DB로 직접 로그인할 수
+-- 있어서, Netlify Function의 로그인 시도 제한이 아무 소용이 없습니다.
+--
+-- 이 파일은 그때 무엇을 했는지 남긴 기록입니다. 지금 구조를 만들려면
+-- 루트의 supabase-schema.sql과 migrations/apply-login-duplicate-names.sql
+-- 을 쓰세요.
+--
 -- 학생 보관 기능을 운영 DB에 안전하게 추가합니다.
 -- 기존 학생과 관련 기록은 삭제하거나 변경하지 않습니다.
 begin;

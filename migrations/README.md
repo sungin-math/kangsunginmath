@@ -14,6 +14,30 @@ Supabase 데이터베이스 구조를 바꾸는 SQL입니다.
 `data-ops/insert-*.sql`은 학생 실명과 성적이 들어 있어 `.gitignore`로 저장소에서
 제외됩니다. 이 컴퓨터에만 있습니다.
 
+## 다시 실행하면 안 되는 파일
+
+아래 두 파일에는 옛 `login_student(text, text)`를 만들고 **anon에게 실행 권한을
+주는** 구문이 남아 있습니다. 그 함수가 살아 있으면 브라우저가 DB로 직접 로그인할
+수 있어서 Netlify Function의 로그인 시도 제한이 무력화됩니다.
+
+- `migrations/apply-student-archive.sql`
+- `migrations/migrate-student-passwords.sql`
+
+두 파일은 **그때 무엇을 했는지 남긴 기록**이지 다시 쓰는 절차가 아닙니다.
+각 파일 맨 위에도 같은 경고를 붙여 뒀습니다.
+
+루트 `supabase-schema.sql`에는 예전에 같은 구문이 있었지만 2026-09-07에
+`drop`만 남기고 생성 부분을 뺐습니다. 그전까지는 **새 프로젝트를 만들 때마다
+그 구멍이 되살아나는** 상태였습니다.
+
+## 정본 스키마의 한계
+
+`supabase-schema.sql`은 반, 학생, 숙제, 영상, 성적, 상담 기록과 그 RLS 정책까지
+만듭니다. 하지만 **사진 숙제, 수업일지, 로그인 시도 제한은 들어 있지 않습니다.**
+빈 프로젝트를 만들 때는 이것만으로 부족하고, `migrations/`의 파일들을 이어서
+실행해야 합니다. 아직 빈 프로젝트에서 처음부터 끝까지 세워보는 검증은 하지
+않았습니다.
+
 ## 적용 이력
 
 `apply-schema-migrations-log.sql`을 적용하면 `public.schema_migrations` 표가

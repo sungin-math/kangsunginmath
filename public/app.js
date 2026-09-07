@@ -226,6 +226,8 @@ function initialState(previous = null) {
     view: "calendar",
     adminMenu: { openGroup: "", mobileOpen: false, navigationId: nextRequestId(previous?.adminMenu?.navigationId) },
     selectedClassId: null,
+    // 영상 목록을 어느 날짜부터 받아왔는지. 학생일 때만 채워집니다.
+    videoCutoff: "",
     calendarDate: new Date(),
     adminCalendarGrade: "",
     homeworkDraftDate: "",
@@ -476,6 +478,26 @@ function toDb(item) {
   return output;
 }
 
+// 학생 화면의 영상 목록은 최근 두 달치만 받아옵니다.
+//
+// 영상은 269개까지 쌓였고 계속 늘어납니다. 학생에게 지난 학기 영상은
+// 목록만 길게 만들 뿐이고, 받아오는 양도 그만큼 커집니다.
+//
+// 관리자는 전부 받습니다. 시청 기록 화면에서 옛 영상의 제목과 반을 찾아야
+// 하고, 오래된 영상도 고치거나 지울 수 있어야 하기 때문입니다. 여기서
+// 같이 잘라내면 관리자 화면에 "삭제된 영상"이라고 뜨는데, 사실이 아닙니다.
+const STUDENT_VIDEO_MONTHS = 2;
+
+function studentVideoCutoffDate() {
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth() - STUDENT_VIDEO_MONTHS, 1);
+  // 목표 달에 없는 날짜가 나오는 경우를 막습니다. 4월 30일에서 두 달을 빼면
+  // 2월 30일인데, 그대로 두면 3월 초로 넘어가 오히려 범위가 좁아집니다.
+  const lastDayOfTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(now.getDate(), lastDayOfTargetMonth));
+  return isoDate(target);
+}
+
 async function refreshData() {
   if (!supabaseClient) {
     const demoData = loadDemoData();
@@ -485,37 +507,48 @@ async function refreshData() {
     return;
   }
 
-  const [classes, homeworks, videos, students] = await Promise.all([
-    supabaseClient.from("classes").select("*").order("created_at", { ascending: true }),
-    supabaseClient.from("homeworks").select("*").order("date", { ascending: true }),
-    supabaseClient.from("videos").select("*").order("created_at", { ascending: false }),
-    state.user?.role === "admin"
-      ? supabaseClient.from("students").select("id, name, school, class_id, archived_at, created_at").order("created_at", { ascending: true })
-      : Promise.resolve({ data: [] }),
-  ]);
-  const [studentScores, studentNotes, counselingRecords] = state.user?.role === "admin"
-    ? await Promise.all([
-        supabaseClient.from("student_scores").select("*").order("created_at", { ascending: false }),
-        supabaseClient.from("student_notes").select("*").order("record_date", { ascending: false }),
-        supabaseClient.from("counseling_records").select("*").order("counseling_date", { ascending: false }),
-      ])
-    : [{ data: [] }, { data: [] }, { data: [] }];
+  const isAdmin = state.user?.role === "admin";
+  const videoCutoff = isAdmin ? "" : studentVideoCutoffDate();
 
-  const error = classes.error || homeworks.error || videos.error || students.error || studentScores.error || studentNotes.error || counselingRecords.error;
-  if (error) throw error;
+  // 예전에는 여기서 표마다 한 번씩만 조회했습니다. Supabase는 한 번에
+  // 1000행까지만 돌려주므로, 그 수를 넘는 순간 뒷부분이 오류 없이
+  // 사라졌습니다. 목록이 조용히 짧아질 뿐이라 알아챌 방법이 없었고,
+  // 통계와 학생 상세가 틀린 채로 나왔을 겁니다. fetchAllRows는 이미
+  // 사진 숙제와 수업일지 조회에서 쓰던 것입니다.
+  const [classes, homeworks, videos, students] = await Promise.all([
+    fetchAllSupabaseRows("classes", "created_at", true),
+    fetchAllSupabaseRows("homeworks", "date", true),
+    fetchAllRows(() => {
+      const query = supabaseClient.from("videos").select("*").order("created_at", { ascending: false });
+      return videoCutoff ? query.gte("created_at", videoCutoff) : query;
+    }),
+    isAdmin
+      ? fetchAllSupabaseRows("students", "created_at", true, "id, name, school, class_id, archived_at, created_at")
+      : Promise.resolve([]),
+  ]);
+  const [studentScores, studentNotes, counselingRecords] = isAdmin
+    ? await Promise.all([
+        fetchAllSupabaseRows("student_scores", "created_at", false),
+        fetchAllSupabaseRows("student_notes", "record_date", false),
+        fetchAllSupabaseRows("counseling_records", "counseling_date", false),
+      ])
+    : [[], [], []];
 
   state.data = {
-    classes: classes.data.map(normalizeClass),
-    homeworks: homeworks.data.map(normalizeHomework),
-    videos: videos.data.map(normalizeVideo),
-    students: (students.data || []).map(normalizeStudent),
+    classes: classes.map(normalizeClass),
+    homeworks: homeworks.map(normalizeHomework),
+    videos: videos.map(normalizeVideo),
+    students: students.map(normalizeStudent),
     videoViews: state.data.videoViews || [],
-    studentScores: (studentScores.data || []).map(normalizeStudentScore),
-    studentNotes: (studentNotes.data || []).map(normalizeStudentNote),
-    counselingRecords: (counselingRecords.data || []).map(normalizeCounselingRecord),
+    studentScores: studentScores.map(normalizeStudentScore),
+    studentNotes: studentNotes.map(normalizeStudentNote),
+    counselingRecords: counselingRecords.map(normalizeCounselingRecord),
     classSessions: state.data.classSessions || [],
     studentLessonRecords: state.data.studentLessonRecords || [],
   };
+  // 화면에서 "최근 두 달" 안내를 띄울지 판단할 때 씁니다. 관리자와 데모
+  // 모드에서는 자르지 않았으므로 빈 문자열입니다.
+  state.videoCutoff = videoCutoff;
   state.loading = false;
 }
 
@@ -830,8 +863,14 @@ function renderLogin() {
             <button class="primary-btn" type="submit">로그인</button>
           </form>
           ${!adminMode ? installActionMarkup() : ""}
+          <!-- 예전에는 "학생은 같은 학년의 숙제와 영상을 볼 수 있습니다"라고만
+               적혀 있었습니다. 읽는 사람은 다른 학년 자료가 막혀 있다는 뜻으로
+               받아들이지만, 학년 구분은 화면에서 걸러 보여주는 것일 뿐 서버가
+               막고 있지는 않습니다. 지키지 못하는 약속은 하지 않습니다.
+               정말로 보호되는 것이 무엇인지만 적었습니다. -->
           <div class="hint">
-            학생은 같은 학년의 숙제와 영상을 볼 수 있습니다.<br />
+            로그인하면 자기 학년의 숙제와 최근 ${STUDENT_VIDEO_MONTHS}개월 영상이 보입니다.<br />
+            성적과 상담 기록은 선생님만 봅니다. 제출한 사진은 본인과 선생님만 볼 수 있습니다.<br />
             관리자 화면에서는 반, 영상, 숙제, 학생 계정을 직접 관리합니다.
           </div>
         </div>
@@ -1350,7 +1389,12 @@ async function fetchAllRows(buildQuery) {
   const pageSize = 1000;
   const rows = [];
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
+    // 정렬 기준에 동점이 있으면 쪽마다 순서가 달라질 수 있습니다. 영상은
+    // created_at이 날짜라 같은 날 올린 것끼리 전부 동점이고, 숙제도 date가
+    // 겹칩니다. 그대로 나눠 받으면 어떤 행은 두 번 오고 어떤 행은 한 번도
+    // 오지 않습니다. id는 기본키라 절대 겹치지 않으므로 뒤에 붙여 순서를
+    // 확정합니다.
+    const { data, error } = await buildQuery().order("id", { ascending: true }).range(from, from + pageSize - 1);
     if (error) throw error;
     rows.push(...(data || []));
     if ((data || []).length < pageSize) break;
@@ -2556,7 +2600,10 @@ function studentVideos() {
     <section class="section-head">
       <div>
         <h1>${h(className(classId))} 영상</h1>
-        <p class="subtle">영상은 사이트 안에서 재생하지 않고 유튜브로 이동합니다.</p>
+        <p class="subtle">영상은 사이트 안에서 재생하지 않고 유튜브로 이동합니다.${
+          // 옛 영상이 그냥 사라진 것처럼 보이면 학생은 선생님께 묻게 됩니다.
+          state.videoCutoff ? `<br />최근 ${STUDENT_VIDEO_MONTHS}개월 안에 올라온 영상만 보입니다. 더 예전 영상이 필요하면 선생님께 말씀해 주세요.` : ""
+        }</p>
       </div>
       <button class="ghost-btn" onclick="go('classes-student')">반 목록</button>
     </section>

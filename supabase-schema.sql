@@ -216,24 +216,23 @@ to authenticated
 using (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email())
 with check (lower(coalesce(auth.jwt() ->> 'email', '')) = public.admin_email());
 
+-- 옛 학생 로그인 함수는 여기서 만들지 않고 지우기만 합니다.
+--
+-- 예전에는 이 파일이 login_student(text, text)를 security definer로 만들고
+-- anon에게 실행 권한까지 줬습니다. 브라우저가 이름과 비밀번호를 DB로 직접
+-- 보내는 구조라, Netlify Function에 있는 로그인 시도 제한이 아무 소용이
+-- 없었습니다. 아무 데서나 이 RPC만 두드리면 됐기 때문입니다.
+--
+-- 운영 DB에서는 이미 지웠지만, 새 프로젝트를 만들거나 장애 복구를 하면서
+-- 이 파일을 다시 실행하면 그 구멍이 그대로 되살아납니다. 그래서 생성문을
+-- 빼고 drop만 남깁니다. 오래된 DB에 이 파일을 실행하면 남은 함수도 같이
+-- 정리됩니다.
+--
+-- 지금 로그인은 login_student_matches(text, text, text)를 씁니다.
+-- 그 함수는 service_role만 실행할 수 있어 Netlify Function을 거쳐야 하고,
+-- 동명이인을 학교로 구분합니다. migrations/apply-login-duplicate-names.sql
+-- 을 참고하세요.
 drop function if exists public.login_student(text, text);
-
-create or replace function public.login_student(student_name text, student_password text)
-returns table(id uuid, name text, class_id uuid, school text)
-language sql
-security definer
-set search_path = pg_catalog, public, extensions
-as $$
-  select students.id, students.name, students.class_id, students.school
-  from public.students
-  where students.archived_at is null
-    and students.name = student_name
-    and students.password_hash = extensions.crypt(student_password, students.password_hash)
-  limit 1;
-$$;
-
-revoke all on function public.login_student(text, text) from public;
-grant execute on function public.login_student(text, text) to anon, authenticated;
 
 create or replace function public.admin_create_student(
   student_name text,

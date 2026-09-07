@@ -8,6 +8,20 @@
    - 예: `teacher@example.com`
    - 비밀번호는 직접 정합니다.
 
+> **`supabase-schema.sql`만으로는 지금 운영 중인 구조가 만들어지지 않습니다.**
+>
+> 반, 학생, 숙제, 영상, 성적, 상담 기록과 그 정책까지는 들어 있지만
+> **사진 숙제, 수업일지, 로그인 시도 제한은 빠져 있습니다.**
+> 이어서 `migrations/`의 파일들을 실행해야 하며, 순서는
+> `migrations/README.md`에 적어 뒀습니다.
+>
+> 빈 프로젝트에서 처음부터 끝까지 세워보는 검증은 아직 하지 않았습니다.
+>
+> `migrations/apply-student-archive.sql`과
+> `migrations/migrate-student-passwords.sql`은 **다시 실행하지 마세요.**
+> 옛 `login_student`를 만들면서 anon에게 실행 권한을 주는 구문이 남아 있어,
+> 그 함수가 살아나면 아래 로그인 시도 제한이 통째로 무력화됩니다.
+
 ## 2. 사이트에 Supabase 연결하기
 
 1. Supabase 프로젝트의 `Project Settings` > `API`에서 아래 값을 복사합니다.
