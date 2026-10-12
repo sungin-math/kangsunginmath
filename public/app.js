@@ -5519,6 +5519,8 @@ async function saveStudent(event) {
     classId: document.querySelector("#studentClassId").value,
   };
   const id = state.edit?.type === "student" ? state.edit.id : null;
+  // render()가 입력칸을 새로 만들기 전에 초기 비밀번호도 확보합니다.
+  const password = id ? null : document.querySelector("#studentPassword").value;
 
   // 학생 등록은 submitRecord를 거치지 않고 RPC를 직접 부르므로 여기서도
   // 같은 잠금이 필요합니다. 두 번 눌리면 이름이 같은 학생이 두 명 생기고,
@@ -5531,7 +5533,6 @@ async function saveStudent(event) {
     if (id) {
       await writeRecord("students", payload, id);
     } else {
-      const password = document.querySelector("#studentPassword").value;
       if (supabaseClient) {
         const { error } = await supabaseClient.rpc("admin_create_student", {
           student_name: payload.name,
